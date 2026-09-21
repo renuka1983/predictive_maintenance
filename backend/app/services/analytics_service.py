@@ -229,16 +229,22 @@ class AnalyticsService:
         total_produced = 0
         total_downtime = 0.0
 
+        # Fetch every station's batches in one query and group in memory;
+        # querying per machine turns a line view into an N+1.
+        machine_ids = [m.id for m in machines]
+        batches_by_machine: Dict[str, List[ProductionBatch]] = defaultdict(list)
+        if machine_ids:
+            for batch in db.execute(
+                select(ProductionBatch).where(
+                    ProductionBatch.tenant_id == tenant_id,
+                    ProductionBatch.machine_id.in_(machine_ids),
+                    ProductionBatch.start_time >= since,
+                )
+            ).scalars():
+                batches_by_machine[batch.machine_id].append(batch)
+
         for machine in machines:
-            batches = list(
-                db.execute(
-                    select(ProductionBatch).where(
-                        ProductionBatch.tenant_id == tenant_id,
-                        ProductionBatch.machine_id == machine.id,
-                        ProductionBatch.start_time >= since,
-                    )
-                ).scalars()
-            )
+            batches = batches_by_machine.get(machine.id, [])
             produced = sum(b.produced_units for b in batches)
             downtime = sum(b.downtime_minutes for b in batches)
             oee = (sum(b.oee for b in batches) / len(batches)) if batches else 0.0
