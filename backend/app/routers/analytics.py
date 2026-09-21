@@ -9,6 +9,11 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.dependencies import get_current_tenant, get_tenant_machine
 from app.models import Machine, Tenant
+from app.schemas.enterprise import (
+    FleetComparisonRow,
+    PortfolioRollup,
+    SiteBenchmark,
+)
 from app.schemas.analytics import (
     AnomalyReport,
     CascadeImpact,
@@ -18,7 +23,7 @@ from app.schemas.analytics import (
     RULPrediction,
     WeibullFit,
 )
-from app.services import AnalyticsService, FeatureGate, MLService
+from app.services import AnalyticsService, EnterpriseService, FeatureGate, MLService
 
 router = APIRouter(prefix="/analytics", tags=["analytics"])
 
@@ -126,7 +131,13 @@ def get_dashboard(
         summary.rul_watchlist = watchlist[:5]
 
     if "benchmarking" in enabled:
-        summary.site_benchmark = AnalyticsService.site_benchmark(db, tenant.id)
+        benchmark = EnterpriseService.benchmark_sites(db, tenant.id)
+        summary.site_benchmark = benchmark["sites"]
+        summary.benchmark_opportunity = benchmark["opportunity"]
+
+    if "multi_site" in enabled:
+        rollup = EnterpriseService.portfolio_rollup(db, tenant.id)
+        summary.portfolio_totals = rollup["totals"]
 
     return summary
 
@@ -257,14 +268,57 @@ def get_rul(
 
 
 # ----------------------------------------------------------------------
-# Level 4
+# Level 4 - enterprise
 # ----------------------------------------------------------------------
-@router.get("/benchmark", response_model=List[dict])
+@router.get("/portfolio", response_model=PortfolioRollup)
+def get_portfolio(
+    window_days: int = Query(90, ge=7, le=1825),
+    group_by: str = Query(
+        "site", pattern="^(site|region)$", description="Roll up by site or by region"
+    ),
+    tenant: Tenant = Depends(get_current_tenant),
+    db: Session = Depends(get_db),
+) -> PortfolioRollup:
+    """Organisation-wide rollup with a per-site or per-region breakdown.
+
+    Totals are recomputed from raw counts and OEE is machine-weighted, so a
+    small plant cannot swing the headline figure.
+    """
+    FeatureGate.require(db, tenant, "multi_site")
+    return EnterpriseService.portfolio_rollup(db, tenant.id, window_days, group_by)
+
+
+@router.get("/benchmark", response_model=SiteBenchmark)
 def get_benchmark(
     window_days: int = Query(90, ge=7, le=1825),
     tenant: Tenant = Depends(get_current_tenant),
     db: Session = Depends(get_db),
-) -> List[dict]:
-    """Rank this tenant's sites on OEE, downtime and maintenance spend."""
+) -> SiteBenchmark:
+    """Rank sites on every metric and price the gap to best-in-class.
+
+    Percentile ranks are direction-normalised, so 1.0 always means best
+    whether the metric is one to maximise (OEE) or minimise (cost).
+    """
     FeatureGate.require(db, tenant, "benchmarking")
-    return AnalyticsService.site_benchmark(db, tenant.id, window_days)
+    return EnterpriseService.benchmark_sites(db, tenant.id, window_days)
+
+
+@router.get("/fleet", response_model=List[FleetComparisonRow])
+def get_fleet_comparison(
+    machine_type: Optional[str] = Query(
+        None, description="Restrict to one asset class; omit for all"
+    ),
+    window_days: int = Query(90, ge=7, le=1825),
+    tenant: Tenant = Depends(get_current_tenant),
+    db: Session = Depends(get_db),
+) -> List[FleetComparisonRow]:
+    """Compare the same class of asset across sites.
+
+    Holding equipment type constant and varying the site separates "this
+    plant runs worse" from "this plant runs more of a troublesome asset".
+    """
+    FeatureGate.require(db, tenant, "fleet_comparison")
+    rows = EnterpriseService.fleet_comparison(
+        db, tenant.id, machine_type, window_days
+    )
+    return [FleetComparisonRow(**row) for row in rows]

@@ -12,6 +12,15 @@ from app.schemas.analytics import (
     WeibullFit,
 )
 from app.schemas.common import Message, PaginatedResponse, UpgradePath
+from app.schemas.enterprise import (
+    BenchmarkOpportunity,
+    FleetComparisonRow,
+    MetricLeader,
+    PortfolioRollup,
+    PortfolioTotals,
+    SiteBenchmark,
+)
+from app.schemas.site import SiteCreate, SiteResponse, SiteUpdate, SiteWithStats
 from app.schemas.machine import (
     MachineCreate,
     MachineResponse,
@@ -88,4 +97,14 @@ __all__ = [
     "AnomalyEvent",
     "AnomalyReport",
     "DashboardSummary",
+    "SiteCreate",
+    "SiteUpdate",
+    "SiteResponse",
+    "SiteWithStats",
+    "PortfolioTotals",
+    "PortfolioRollup",
+    "MetricLeader",
+    "BenchmarkOpportunity",
+    "SiteBenchmark",
+    "FleetComparisonRow",
 ]

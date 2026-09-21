@@ -11,12 +11,14 @@ from app.services.feature_catalog import (
     features_for_level,
     features_unlocked_at,
 )
+from app.services.enterprise_service import EnterpriseService
 from app.services.feature_gate import FeatureGate
 from app.services.maturity_service import MaturityService
 from app.services.ml_service import MLService
 
 __all__ = [
     "AnalyticsService",
+    "EnterpriseService",
     "FeatureGate",
     "MaturityService",
     "MLService",

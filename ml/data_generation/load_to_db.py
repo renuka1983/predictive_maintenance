@@ -27,6 +27,7 @@ from app.models import (  # noqa: E402
     MaintenanceRecord,
     ProductionBatch,
     SensorReading,
+    Site,
     Tenant,
 )
 from app.services import FeatureGate, MaturityService  # noqa: E402
@@ -64,6 +65,11 @@ def load_tenant(data: GeneratedData, reset: bool = False) -> Dict[str, object]:
         db.add(tenant)
         db.commit()
         db.refresh(tenant)
+
+        # --- site registry (Level 4 grouping metadata) ------------------
+        for row in data.site_registry:
+            db.add(Site(tenant_id=tenant.id, **row))
+        db.commit()
 
         # --- machines ---------------------------------------------------
         code_to_id: Dict[str, str] = {}
@@ -168,7 +174,8 @@ def main() -> None:
             f"score {result['score']:.1f}"
         )
         print(
-            f"    machines={result['machines']} "
+            f"    sites={result['sites']} "
+            f"machines={result['machines']} "
             f"maintenance={result['maintenance_records']} "
             f"production={result['production_batches']} "
             f"sensors={result['sensor_readings']}"

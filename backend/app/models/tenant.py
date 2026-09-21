@@ -31,6 +31,9 @@ class Tenant(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     machines = relationship(
         "Machine", back_populates="tenant", cascade="all, delete-orphan"
     )
+    sites = relationship(
+        "Site", back_populates="tenant", cascade="all, delete-orphan"
+    )
     feature_toggles = relationship(
         "FeatureToggle", back_populates="tenant", cascade="all, delete-orphan"
     )

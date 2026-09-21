@@ -33,6 +33,7 @@ from app.models import (  # noqa: E402
     MaintenanceRecord,
     ProductionBatch,
     SensorReading,
+    Site,
     Tenant,
 )
 from app.services import FeatureGate, MaturityService  # noqa: E402
@@ -261,6 +262,70 @@ def level_three_tenant(
         seed_maintenance(tenant, machine, count=20, spacing_days=12)
         seed_production(tenant, machine, count=40)
         seed_sensors(tenant, machine, count=400)
+    MaturityService.assess(db_session, tenant)
+    FeatureGate.sync_toggles(db_session, tenant)
+    return tenant
+
+
+@pytest.fixture()
+def make_site(db_session) -> Callable[..., Site]:
+    """Factory registering a site for a tenant."""
+
+    def _make(tenant: Tenant, name: str, **kwargs) -> Site:
+        site = Site(tenant_id=tenant.id, name=name, **kwargs)
+        db_session.add(site)
+        db_session.commit()
+        db_session.refresh(site)
+        return site
+
+    return _make
+
+
+@pytest.fixture()
+def level_four_tenant(
+    db_session,
+    make_tenant,
+    make_site,
+    make_machine,
+    seed_maintenance,
+    seed_production,
+    seed_sensors,
+):
+    """A multi-site enterprise tenant - assessed to Level 4.
+
+    The three plants are deliberately uneven: Detroit is the best performer,
+    Brno the worst. Benchmarking over identical sites would have nothing to
+    report, so the fixture bakes in the spread the tests assert on.
+    """
+    tenant = make_tenant(slug="l4-tenant", name="Level Four Group")
+
+    # Benchmarks read a trailing 90-day window, so the plants must differ in
+    # failure *density* rather than total count - spreading more records over
+    # proportionally more days would look identical inside the window.
+    plants = [
+        # (site, region, count, spacing_days, downtime hours, produced units)
+        ("Detroit", "North America", 10, 12.0, 2.0, 950),
+        ("Monterrey", "North America", 20, 6.0, 4.0, 800),
+        ("Brno", "Europe", 40, 3.0, 7.0, 650),
+    ]
+    for site, region, count, spacing, downtime, produced in plants:
+        make_site(tenant, site, region=region, country="Testland")
+        for index in range(1, 3):
+            machine = make_machine(
+                tenant,
+                code=f"{site[:3].upper()}-M{index:03d}",
+                site=site,
+                machine_type="CNC Mill" if index == 1 else "Conveyor",
+                line_position=index,
+                has_sensors=True,
+            )
+            seed_maintenance(
+                tenant, machine, count=count, spacing_days=spacing,
+                downtime_hours=downtime,
+            )
+            seed_production(tenant, machine, count=40, produced=produced)
+            seed_sensors(tenant, machine, count=400)
+
     MaturityService.assess(db_session, tenant)
     FeatureGate.sync_toggles(db_session, tenant)
     return tenant

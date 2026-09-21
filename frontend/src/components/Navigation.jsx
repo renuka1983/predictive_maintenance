@@ -39,7 +39,12 @@ const SECTIONS = [
   },
   {
     label: 'Level 4 · Enterprise',
-    items: [{ to: '/benchmark', label: 'Site Benchmarking', feature: 'benchmarking' }],
+    items: [
+      { to: '/portfolio', label: 'Portfolio', feature: 'multi_site' },
+      { to: '/benchmark', label: 'Site Benchmarking', feature: 'benchmarking' },
+      { to: '/fleet', label: 'Fleet Comparison', feature: 'fleet_comparison' },
+      { to: '/sites', label: 'Site Registry', feature: 'site_registry' },
+    ],
   },
   {
     label: 'Account',
@@ -57,6 +62,9 @@ const FEATURE_LEVEL = {
   realtime_monitoring: 3,
   sensor_telemetry: 3,
   benchmarking: 4,
+  multi_site: 4,
+  fleet_comparison: 4,
+  site_registry: 4,
 };
 
 export default function Navigation() {

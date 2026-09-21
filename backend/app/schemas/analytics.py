@@ -124,3 +124,5 @@ class DashboardSummary(BaseModel):
     rul_watchlist: Optional[List[RULPrediction]] = None
     # Level 4
     site_benchmark: Optional[List[Dict[str, object]]] = None
+    benchmark_opportunity: Optional[Dict[str, object]] = None
+    portfolio_totals: Optional[Dict[str, object]] = None

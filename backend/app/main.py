@@ -11,7 +11,15 @@ from sqlalchemy import text
 from app.config import settings
 from app.database import engine
 from app.models import Base
-from app.routers import analytics, machines, maintenance, production, sensors, tenants
+from app.routers import (
+    analytics,
+    machines,
+    maintenance,
+    production,
+    sensors,
+    sites,
+    tenants,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -95,5 +103,5 @@ def root() -> dict:
     }
 
 
-for module in (tenants, machines, maintenance, production, analytics, sensors):
+for module in (tenants, machines, maintenance, production, analytics, sensors, sites):
     app.include_router(module.router, prefix=settings.api_v1_prefix)

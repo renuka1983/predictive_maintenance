@@ -174,6 +174,67 @@ Severity is reported from the reading's deviation from its own machine's
 baseline (|z| ≥ 6 critical, ≥ 4.5 high), which is what an operator can act on;
 the raw forest score is returned alongside for ranking.
 
+## Level 4 — the enterprise tier
+
+Levels 1-3 are diagnostic: they answer "which machine is about to fail?" for
+one plant. Level 4 is comparative, and that difference drives its design — a
+ranked list is not worth $2,999/mo, a priced gap is.
+
+### Sites as first-class entities, additively
+
+`Machine.site` remains a plain string and stays the join key. The `sites` table
+only attaches region/country/timezone to a site *name*. This was chosen over
+making `site` a foreign key because:
+
+- Level 1-3 tenants would otherwise need a site registry they have no use for.
+- Existing rows keep working untouched — no backfill, no migration ordering.
+- A site used by machines but missing from the registry still groups correctly
+  in rollups; it simply cannot be grouped by region. The failure mode is
+  degraded, not broken, and `/sites/unregistered` makes it visible.
+
+### Rollups avoid two classic aggregation errors
+
+`portfolio_rollup` recomputes organisation totals from raw counts rather than
+averaging the per-site rows, and reports a **machine-weighted** OEE. Averaging
+per-machine averages would let a four-machine plant swing the headline as hard
+as a forty-machine one. `test_weighted_oee_accounts_for_plant_size` pins this
+by asserting the weighted figure sits closer to the large plant than a naive
+mean does.
+
+All group aggregation runs off two queries (maintenance and production for the
+whole tenant) bucketed in memory. Querying per group would be an N+1 that grows
+with the customer's plant count — the same bug already fixed once in the
+production line view.
+
+### Direction-normalised percentiles
+
+The five benchmark metrics point in opposite directions: OEE and MTBF are
+better high, cost/downtime/reactive-ratio better low. `_percentile_rank` takes
+`higher_is_better` and normalises against it, so **1.0 always means
+best-in-class**. Without that, a composite score would be an average of
+incomparable numbers and would rank a cheap, broken plant above a productive
+one.
+
+### Pricing the gap
+
+`_opportunity` measures every site against the **best observed site**, not a
+theoretical ideal or an industry figure. That choice is deliberate: the
+resulting number survives the obvious objection, because the target is already
+being achieved somewhere in the customer's own estate. Gaps are measured per
+machine so plant size does not distort them, then multiplied back by machine
+count and annualised.
+
+### Why fleet comparison exists
+
+Site benchmarking can be confounded: a plant may look expensive only because it
+runs more of one troublesome asset class. `fleet_comparison` holds the machine
+type constant and varies the site, which separates "this plant runs worse" from
+"this plant runs harder equipment".
+
+On the pilot data it earns its place immediately — Robotic Welders are the one
+asset class where the otherwise best-in-class site is *not* best, which the
+site-level ranking cannot show.
+
 ## Performance
 
 The dashboard aggregates across every unlocked tier, which made it the natural

@@ -49,6 +49,8 @@ Fixtures worth knowing (`app/tests/conftest.py`):
 | `level_one_tenant` | CMMS only, assessed to L1 |
 | `level_two_tenant` | + production, assessed to L2 |
 | `level_three_tenant` | + sensors, assessed to L3 |
+| `level_four_tenant` | 3 uneven plants across 2 regions, assessed to L4 |
+| `make_site` | site registry factory |
 
 ## Adding a feature
 
@@ -100,3 +102,6 @@ tenant for exactly this reason.
 | Level does not change after loading data | Assessment is not automatic; `POST /tenants/{id}/assess` |
 | Frontend shows "Cannot reach the API" | Backend not running, or `VITE_API_BASE_URL` unset while not using the dev proxy |
 | RUL returns `null` | No degradation trend clears the noise floor — expected on healthy machines |
+| Benchmark shows identical sites | Metrics read a trailing window; vary failure *density* (spacing), not total count, or every site looks the same inside it |
+| `opportunity` is `null` | Only one site — there is no gap to measure against |
+| Site missing a region in rollups | Registered via machines only; `POST /sites/sync` then set its region |

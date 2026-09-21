@@ -5,6 +5,7 @@ import { Loading } from './components/States';
 import { useTenant } from './hooks/useTenant';
 
 import Benchmark from './pages/Benchmark';
+import FleetComparison from './pages/FleetComparison';
 import Dashboard from './pages/Dashboard';
 import ImpactSimulator from './pages/ImpactSimulator';
 import Machines from './pages/Machines';
@@ -14,7 +15,9 @@ import NotFound from './pages/NotFound';
 import ProductionLines from './pages/ProductionLines';
 import Reliability from './pages/Reliability';
 import RiskAnalysis from './pages/RiskAnalysis';
+import Portfolio from './pages/Portfolio';
 import Settings from './pages/Settings';
+import Sites from './pages/Sites';
 import Telemetry from './pages/Telemetry';
 
 export default function App() {
@@ -118,6 +121,42 @@ export default function App() {
                   requirements={['Stream IoT sensor readings from instrumented machines']}
                 >
                   <Telemetry />
+                </FeatureGate>
+              }
+            />
+            <Route
+              path="/portfolio"
+              element={
+                <FeatureGate
+                  feature="multi_site"
+                  requirements={['Onboard a second site and set the site field on its machines']}
+                >
+                  <Portfolio />
+                </FeatureGate>
+              }
+            />
+            <Route
+              path="/fleet"
+              element={
+                <FeatureGate
+                  feature="fleet_comparison"
+                  requirements={[
+                    'Onboard a second site',
+                    'Set machine_type on machines so asset classes can be compared',
+                  ]}
+                >
+                  <FleetComparison />
+                </FeatureGate>
+              }
+            />
+            <Route
+              path="/sites"
+              element={
+                <FeatureGate
+                  feature="site_registry"
+                  requirements={['Onboard a second site to unlock the enterprise tier']}
+                >
+                  <Sites />
                 </FeatureGate>
               }
             />

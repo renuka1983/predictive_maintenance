@@ -35,6 +35,30 @@ CREATE TABLE IF NOT EXISTS tenants (
 CREATE INDEX IF NOT EXISTS ix_tenants_slug ON tenants (slug);
 
 -- --------------------------------------------------------------------------
+-- Sites (Level 4 enterprise)
+--
+-- Additive: machines.site remains the join key, so Level 1-3 tenants need no
+-- rows here at all. This table only attaches region/country metadata so that
+-- enterprise rollups can group plants.
+-- --------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS sites (
+    id           VARCHAR(36)  PRIMARY KEY DEFAULT gen_random_uuid()::text,
+    tenant_id    VARCHAR(36)  NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    name         VARCHAR(120) NOT NULL,
+    display_name VARCHAR(200),
+    region       VARCHAR(120),
+    country      VARCHAR(80),
+    timezone     VARCHAR(60),
+    is_active    BOOLEAN      NOT NULL DEFAULT TRUE,
+    created_at   TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    updated_at   TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    CONSTRAINT uq_site_tenant_name UNIQUE (tenant_id, name)
+);
+
+CREATE INDEX IF NOT EXISTS ix_sites_tenant ON sites (tenant_id);
+CREATE INDEX IF NOT EXISTS ix_sites_region ON sites (region);
+
+-- --------------------------------------------------------------------------
 -- Machines
 -- --------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS machines (

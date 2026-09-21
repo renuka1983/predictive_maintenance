@@ -145,7 +145,9 @@ Valid `sensor_type`: `vibration`, `temperature`, `pressure`, `current`,
 | `GET` | `/analytics/roi` | L2 | Preventable cost and annualised savings |
 | `GET` | `/analytics/anomalies` | L3 | Outlier readings (`window_hours`, `contamination`) |
 | `GET` | `/analytics/rul` | L3 | Remaining useful life, soonest first |
-| `GET` | `/analytics/benchmark` | L4 | Sites ranked by OEE |
+| `GET` | `/analytics/portfolio` | L4 | Org totals + per-site or per-region breakdown |
+| `GET` | `/analytics/benchmark` | L4 | Sites ranked on every metric, gap priced |
+| `GET` | `/analytics/fleet` | L4 | Same asset class compared across sites |
 
 Every ML response carries `model_used`/`method` and `confidence`, so a caller
 can tell a trained prediction from a heuristic fallback.
@@ -163,6 +165,66 @@ can tell a trained prediction from a heuristic fallback.
   }
 }
 ```
+
+---
+
+## Sites — Level 4
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/sites` | Register a plant |
+| `GET` | `/sites` | List registered sites with machine counts |
+| `GET` | `/sites/unregistered` | Site names used by machines but not registered |
+| `POST` | `/sites/sync` | Register every site name already in use |
+| `GET` | `/sites/regions` | Distinct regions |
+| `GET`/`PATCH`/`DELETE` | `/sites/{id}` | Fetch, update, remove (by id or name) |
+
+A site's `name` must match the `site` string on its machines — that string is
+the join key. Deleting a site leaves machines untouched; they keep grouping by
+their `site` string and simply lose the region metadata.
+
+**`GET /analytics/portfolio?group_by=region`**
+
+```json
+{
+  "group_by": "region",
+  "group_count": 2,
+  "totals": {
+    "machine_count": 24,
+    "weighted_avg_oee": 0.7312,
+    "maintenance_cost": 233006.0,
+    "cost_per_machine": 9708.58,
+    "reactive_ratio": 0.597
+  },
+  "groups": [
+    { "name": "North America", "machine_count": 16, "avg_oee": 0.7722, "maintenance_cost_per_machine": 7355.9 },
+    { "name": "Europe", "machine_count": 8, "avg_oee": 0.6489, "maintenance_cost_per_machine": 14413.9 }
+  ]
+}
+```
+
+Totals are recomputed from raw counts and OEE is machine-weighted, so a small
+plant cannot swing the headline.
+
+**`GET /analytics/benchmark`** adds `percentiles` and a `composite_score` per
+site, `metric_leaders` per metric, and a priced `opportunity`:
+
+```json
+{
+  "opportunity": {
+    "benchmark_site": "Detroit Works",
+    "benchmark_cost_per_machine": 5572.19,
+    "annualised_saving": 402587.24,
+    "annualised_downtime_hours": 555.3,
+    "worst_offenders": [{ "site": "Brno Facility", "cost_gap": 70732.11 }]
+  }
+}
+```
+
+Percentiles are direction-normalised: `1.0` is best-in-class whether the metric
+is one to maximise (`avg_oee`, `mtbf_hours`) or minimise
+(`maintenance_cost_per_machine`, `downtime_hours_per_machine`,
+`reactive_ratio`). `opportunity` is `null` when there is only one site.
 
 ---
 

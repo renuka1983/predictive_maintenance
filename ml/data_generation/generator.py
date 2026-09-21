@@ -25,7 +25,7 @@ import math
 import random
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 # --------------------------------------------------------------------------
 # Reference data
@@ -87,6 +87,9 @@ class TenantSpec:
     # Weibull shape used to draw times between failures (>1 = wear-out).
     weibull_shape: float = 1.8
     weibull_scale_hours: float = 1400.0
+    # Optional registry metadata per site name: (region, country). Only the
+    # enterprise tier needs it; Level 1-3 tenants leave it empty.
+    site_regions: Dict[str, Tuple[str, str]] = field(default_factory=dict)
 
 
 @dataclass
@@ -94,6 +97,7 @@ class GeneratedData:
     """In-memory payload produced by :func:`generate_tenant`."""
 
     tenant: Dict
+    site_registry: List[Dict] = field(default_factory=list)
     machines: List[Dict] = field(default_factory=list)
     maintenance: List[Dict] = field(default_factory=list)
     production: List[Dict] = field(default_factory=list)
@@ -101,6 +105,7 @@ class GeneratedData:
 
     def summary(self) -> Dict[str, int]:
         return {
+            "sites": len(self.site_registry),
             "machines": len(self.machines),
             "maintenance_records": len(self.maintenance),
             "production_batches": len(self.production),
@@ -163,6 +168,30 @@ PILOT_TENANTS: Dict[str, TenantSpec] = {
         weibull_shape=2.4,
         weibull_scale_hours=900.0,
     ),
+    "tenant-d": TenantSpec(
+        slug="tenant-d",
+        name="Delta Industries",
+        industry="Automotive Components",
+        contact_email="group.reliability@delta-industries.example",
+        subscription_tier="level_4",
+        sites=["Detroit Works", "Monterrey Plant", "Brno Facility"],
+        lines_per_site=2,
+        machines_per_line=4,
+        history_days=540,
+        target_level=4,
+        with_production=True,
+        with_sensors=True,
+        sensor_hours=96,
+        sensor_interval_minutes=15,
+        seed=44,
+        weibull_shape=2.2,
+        weibull_scale_hours=1100.0,
+        site_regions={
+            "Detroit Works": ("North America", "USA"),
+            "Monterrey Plant": ("North America", "Mexico"),
+            "Brno Facility": ("Europe", "Czechia"),
+        },
+    ),
 }
 
 
@@ -179,6 +208,19 @@ def _weibull_interval(rng: random.Random, shape: float, scale: float) -> float:
 
 def _iso(value: datetime) -> str:
     return value.astimezone(timezone.utc).isoformat()
+
+
+def _site_factor(spec: TenantSpec, site: Optional[str]) -> float:
+    """How much worse than the flagship plant this site runs.
+
+    Real estates are uneven, and a benchmark over identical sites would have
+    nothing to report. Sites degrade down the list: the first is the
+    best-in-class performer, each subsequent one fails more often, costs more
+    to fix and yields less.
+    """
+    if not site or site not in spec.sites:
+        return 1.0
+    return 1.0 + 0.35 * spec.sites.index(site)
 
 
 def _build_machines(spec: TenantSpec, rng: random.Random) -> List[Dict]:
@@ -239,8 +281,14 @@ def _build_maintenance(
 
     for machine in machines:
         # --- Reactive failures from a Weibull process -------------------
-        # Higher criticality machines run harder, so they fail sooner.
-        scale = spec.weibull_scale_hours * (1.25 - 0.08 * machine["criticality"])
+        # Higher criticality machines run harder, so they fail sooner; weaker
+        # sites compress the characteristic life further still.
+        factor = _site_factor(spec, machine.get("site"))
+        scale = (
+            spec.weibull_scale_hours
+            * (1.25 - 0.08 * machine["criticality"])
+            / factor
+        )
         cursor = start + timedelta(hours=rng.uniform(0, 400))
 
         while cursor < now:
@@ -251,8 +299,8 @@ def _build_maintenance(
 
             downtime = round(max(0.5, rng.gauss(5.5, 2.4)), 2)
             labor_hours = round(downtime * rng.uniform(0.8, 1.6), 2)
-            labor_cost = round(labor_hours * rng.uniform(55, 95), 2)
-            parts_cost = round(rng.uniform(150, 3200), 2)
+            labor_cost = round(labor_hours * rng.uniform(55, 95) * factor, 2)
+            parts_cost = round(rng.uniform(150, 3200) * factor, 2)
 
             records.append(
                 {
@@ -353,10 +401,17 @@ def _build_production(
 
             shift_hours = rng.uniform(7.0, 8.0)
             planned_units = int(rated * shift_hours)
-            # Performance and quality both decay as failure approaches.
-            performance = max(0.35, rng.gauss(0.93, 0.05) - 0.35 * degradation)
+            # Performance and quality both decay as failure approaches, and
+            # start lower at the weaker sites.
+            site_drag = (_site_factor(spec, machine.get("site")) - 1.0) * 0.12
+            performance = max(
+                0.35, rng.gauss(0.93, 0.05) - 0.35 * degradation - site_drag
+            )
             produced = int(planned_units * performance)
-            defect_rate = min(0.35, max(0.005, rng.gauss(0.02, 0.008) + 0.10 * degradation))
+            defect_rate = min(
+                0.35,
+                max(0.005, rng.gauss(0.02, 0.008) + 0.10 * degradation + site_drag * 0.25),
+            )
             defective = int(produced * defect_rate)
             scrap = int(produced * defect_rate * 0.35)
 
@@ -455,6 +510,15 @@ def generate_tenant(spec: TenantSpec, now: Optional[datetime] = None) -> Generat
         }
     )
 
+    data.site_registry = [
+        {
+            "name": site,
+            "display_name": site,
+            "region": spec.site_regions.get(site, (None, None))[0],
+            "country": spec.site_regions.get(site, (None, None))[1],
+        }
+        for site in spec.sites
+    ]
     data.machines = _build_machines(spec, rng)
     data.maintenance = _build_maintenance(spec, data.machines, rng, now)
 

@@ -12,6 +12,9 @@ const FEATURE_META = {
   anomaly_detection: { level: 3, name: 'Anomaly Detection' },
   rul_prediction: { level: 3, name: 'Remaining Useful Life' },
   benchmarking: { level: 4, name: 'Site Benchmarking' },
+  multi_site: { level: 4, name: 'Multi-site Rollup' },
+  fleet_comparison: { level: 4, name: 'Fleet Comparison' },
+  site_registry: { level: 4, name: 'Site Registry' },
 };
 
 /**

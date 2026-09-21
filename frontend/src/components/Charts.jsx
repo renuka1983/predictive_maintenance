@@ -17,6 +17,7 @@ import {
   BarChart,
   CartesianGrid,
   Cell,
+  LabelList,
   Line,
   LineChart,
   ResponsiveContainer,
@@ -133,6 +134,7 @@ export function SimpleBars({
   labelFormatter,
   axisFormatter,
   toneFor,
+  showValueLabels = false,
 }) {
   const layout = horizontal ? 'vertical' : 'horizontal';
   const tickFormatter = axisFormatter || valueFormatter;
@@ -143,8 +145,8 @@ export function SimpleBars({
         layout={layout}
         margin={
           horizontal
-            ? { top: 4, right: 16, bottom: 4, left: 8 }
-            : { top: 4, right: 8, bottom: 0, left: 0 }
+            ? { top: 4, right: showValueLabels ? 52 : 16, bottom: 4, left: 8 }
+            : { top: showValueLabels ? 20 : 4, right: 8, bottom: 0, left: 0 }
         }
       >
         <CartesianGrid stroke={GRID} horizontal={!horizontal} vertical={horizontal} />
@@ -198,6 +200,14 @@ export function SimpleBars({
             data.map((row, index) => (
               <Cell key={index} fill={toneFor(row)} />
             ))}
+          {showValueLabels && (
+            <LabelList
+              dataKey={valueKey}
+              position={horizontal ? 'right' : 'top'}
+              formatter={valueFormatter}
+              style={{ fill: 'var(--text-secondary)', fontSize: 11 }}
+            />
+          )}
         </Bar>
       </BarChart>
     </ResponsiveContainer>

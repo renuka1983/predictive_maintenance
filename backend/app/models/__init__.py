@@ -10,6 +10,7 @@ from app.models.machine import MACHINE_STATUSES, Machine
 from app.models.maintenance import MAINTENANCE_TYPES, MaintenanceRecord
 from app.models.production import ProductionBatch
 from app.models.sensor import SENSOR_TYPES, SensorReading
+from app.models.site import Site
 from app.models.tenant import Tenant
 
 __all__ = [
@@ -26,5 +27,6 @@ __all__ = [
     "ProductionBatch",
     "SensorReading",
     "SENSOR_TYPES",
+    "Site",
     "FeatureToggle",
 ]

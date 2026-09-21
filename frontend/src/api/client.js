@@ -127,6 +127,20 @@ export const api = {
   rul: (tenantId) => request('/analytics/rul', { tenantId }),
   benchmark: (tenantId) => request('/analytics/benchmark', { tenantId }),
 
+  // --- Level 4 enterprise ---------------------------------------------
+  portfolio: (tenantId, groupBy = 'site', windowDays = 90) =>
+    request(`/analytics/portfolio${qs({ group_by: groupBy, window_days: windowDays })}`, {
+      tenantId,
+    }),
+  fleet: (tenantId, machineType, windowDays = 90) =>
+    request(`/analytics/fleet${qs({ machine_type: machineType, window_days: windowDays })}`, {
+      tenantId,
+    }),
+  listSites: (tenantId) => request('/sites', { tenantId }),
+  syncSites: (tenantId) => request('/sites/sync', { tenantId, method: 'POST' }),
+  updateSite: (tenantId, siteId, body) =>
+    request(`/sites/${encodeURIComponent(siteId)}`, { tenantId, method: 'PATCH', body }),
+
   latestReadings: (tenantId) => request('/sensors/latest', { tenantId }),
   sensorSeries: (tenantId, machineId, sensorType, windowHours = 24) =>
     request(
