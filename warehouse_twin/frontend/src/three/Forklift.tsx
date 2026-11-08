@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { useFrame } from '@react-three/fiber';
 import { Html } from '@react-three/drei';
 import { liveIndex, useStore } from '../store';
+import type { SimEvent } from '../types';
 import { BundleMesh } from './Bundles';
 import { BUNDLE_H, ROLE_COLOR, lerpAngle } from './geometry';
 
@@ -99,6 +100,7 @@ export function Forklift({ id }: { id: string }) {
           <meshBasicMaterial color="#fde047" transparent opacity={0.8} />
         </mesh>
       )}
+      <CaptureCard id={id} />
       {labels && (
         <Html zIndexRange={[3, 0]} position={[0, 3.6, 0]} center style={{ pointerEvents: 'none' }}>
           <div style={{ background: yieldTo ? '#b45309' : color, color: 'white', padding: '1px 6px', borderRadius: 4, fontSize: 12, fontWeight: 700,
@@ -122,5 +124,43 @@ function ForkLoad({ forks, bundle }: { forks: React.RefObject<THREE.Group | null
     <group ref={ref} position={[2.0, 0.5, 0]} rotation={[0, Math.PI / 2, 0]}>
       <BundleMesh wrap={bundle.w} len={bundle.len} />
     </group>
+  );
+}
+
+const CARD_SECONDS = 7; // simulation seconds a capture card stays up (it freezes while paused)
+
+/** Pop-up showing what the forklift captured at the stack face and what it posted to Oracle. */
+function CaptureCard({ id }: { id: string }) {
+  const ev = useStore((s) => {
+    for (let i = s.events.length - 1, n = 0; i >= 0 && n < 120; i--, n++) {
+      const e = s.events[i];
+      if (e.refs?.forklift === id && (e.type === 'BUNDLE_PICKED' || e.type === 'BUNDLE_PLACED')) return e;
+    }
+    return null;
+  }) as SimEvent | null;
+  const t = useStore((s) => s.sim?.t ?? 0);
+  if (!ev || t - ev.t > CARD_SECONDS || t < ev.t - 1) return null;
+  const placed = ev.type === 'BUNDLE_PLACED';
+  const r = ev.refs;
+  const row = (k: string, v: string, c = '#e2e8f0') => (
+    <div style={{ display: 'flex', gap: 6 }}>
+      <span style={{ color: '#94a3b8', width: 62, flexShrink: 0 }}>{k}</span>
+      <span style={{ color: c, fontFamily: 'ui-monospace, Menlo, monospace' }}>{v}</span>
+    </div>
+  );
+  return (
+    <Html zIndexRange={[4, 0]} position={[0, 5.4, 0]} center style={{ pointerEvents: 'none' }}>
+      <div style={{ background: 'rgba(15,23,42,.94)', border: `2px solid ${placed ? '#22c55e' : '#22d3ee'}`, borderRadius: 8,
+        padding: '6px 9px', fontSize: 11.5, fontFamily: 'Roboto, sans-serif', color: '#e2e8f0', whiteSpace: 'nowrap',
+        boxShadow: '0 4px 14px rgba(0,0,0,.5)' }}>
+        <div style={{ fontWeight: 800, color: placed ? '#4ade80' : '#67e8f9', marginBottom: 2, letterSpacing: 0.3 }}>
+          {id} · {placed ? 'PLACEMENT CONFIRMED' : 'PICK-UP SCAN'} · {String(r.task_type ?? '').toLowerCase()}
+        </div>
+        {row('RFID EPC', `${String(r.epc ?? '').slice(0, 6)}…${String(r.epc ?? '').slice(-8)}  read OK`, '#67e8f9')}
+        {row('Barcode', String(r.barcode ?? ''))}
+        {row(placed ? 'Location' : 'From', String(r.location ?? ''), '#fde68a')}
+        {placed && r.oracle && row('Oracle', `${r.oracle}  posted`, '#c4b5fd')}
+      </div>
+    </Html>
   );
 }

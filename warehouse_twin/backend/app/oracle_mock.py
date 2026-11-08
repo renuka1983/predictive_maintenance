@@ -94,10 +94,34 @@ class MockOracle:
             "release_status": "R", "lines": order["lines"],
         })
 
-    def move_order_message(self, order: dict, bundle: dict, t: datetime, src: str, dst: str) -> dict:
-        return self.record(t, "OUTBOUND", "INV Move Order Transaction", order["order_number"], {
+    def move_order_message(self, order: dict, bundle: dict, t: datetime, src: str, dst: str,
+                           capture: dict | None = None) -> dict:
+        return self.record(t, "OUTBOUND", "INV Move Order Transaction (Pick Confirm)", order["order_number"], {
             "lpn": bundle["barcode"], "epc": bundle["epc"], "from_locator": src, "to_locator": dst,
-            "transaction_type": "Pick Confirm",
+            "transaction_type": "Pick Confirm", "sales_order": order["order_number"], "capture": capture,
+        })
+
+    def putaway_message(self, bundle: dict, t: datetime, src: str, dst: str, capture: dict | None = None) -> dict:
+        """Finished bundle moved from receiving to its floor-stack locator (WIP completion -> stock)."""
+        return self.record(t, "OUTBOUND", "INV Subinventory Transfer (Putaway)", bundle["barcode"], {
+            "lpn": bundle["barcode"], "epc": bundle["epc"], "item": bundle["product"],
+            "from_subinventory": "RECV", "from_locator": src,
+            "to_subinventory": "FG-YARD" if "-WH02-" in dst else "FG-INDOOR", "to_locator": dst,
+            "sales_order": bundle["so"], "transaction_type": "Subinventory Transfer", "capture": capture,
+        })
+
+    def relocation_message(self, bundle: dict, t: datetime, src: str, dst: str, capture: dict | None = None) -> dict:
+        return self.record(t, "OUTBOUND", "INV Locator Transfer (Rehandle)", bundle["barcode"], {
+            "lpn": bundle["barcode"], "epc": bundle["epc"], "from_locator": src, "to_locator": dst,
+            "reason": "Unblock order bundle below", "transaction_type": "Locator Transfer", "capture": capture,
+        })
+
+    def load_confirm_message(self, order: dict, bundle: dict, t: datetime, truck: str, plate: str, slot: str,
+                             capture: dict | None = None) -> dict:
+        return self.record(t, "OUTBOUND", "WSH Load Confirm (LPN to truck)", order["order_number"], {
+            "lpn": bundle["barcode"], "epc": bundle["epc"], "delivery_order": order["order_number"],
+            "truck": plate, "truck_id": truck, "load_position": slot, "on_manifest": bundle["so"] == order["order_number"],
+            "capture": capture,
         })
 
     def ship_confirm_message(self, order: dict, manifest: dict, t: datetime) -> dict:

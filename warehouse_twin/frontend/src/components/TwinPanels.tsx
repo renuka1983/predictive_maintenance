@@ -182,7 +182,8 @@ export function EventFeed() {
   const [filter, setFilter] = useState<'all' | 'key'>('key');
   const KEY = new Set(['BUNDLE_PRODUCED', 'LOCATION_ASSIGNED', 'TASK_ASSIGNED', 'BUNDLE_PLACED', 'BUNDLE_PICKED', 'REHANDLE', 'ORDER_RECEIVED',
     'ORDER_ALLOCATED', 'ORDER_STAGED', 'TRUCK_ARRIVED', 'MANIFEST_CREATED', 'TRUCK_LOADED', 'GATE_READ', 'DISPATCH_VALIDATED',
-    'DISPATCH_EXCEPTION', 'OPERATOR_ERROR', 'TRUCK_DEPARTED', 'EXCEPTION_RESOLVING', 'BUNDLE_LOADED', 'RFID_READ', 'SIM_RESET']);
+    'DISPATCH_EXCEPTION', 'OPERATOR_ERROR', 'TRUCK_DEPARTED', 'EXCEPTION_RESOLVING', 'BUNDLE_LOADED', 'RFID_READ', 'SIM_RESET',
+    'ORACLE_SYNC']);
   const list = events.filter((e) => filter === 'all' || KEY.has(e.type)).slice(-14).reverse();
   return (
     <Paper sx={{ ...glass, position: 'absolute', right: 12, bottom: 12, width: 430, p: 1.25, zIndex: 4 }}>
@@ -198,7 +199,15 @@ export function EventFeed() {
           <Box key={e.id} sx={{ display: 'flex', gap: 0.75, py: 0.3, borderBottom: '1px solid #1e293b', fontSize: 11.5 }}>
             <Box sx={{ ...mono, color: '#64748b', fontSize: 10.5, pt: 0.1 }}>{clock(e.ts)}</Box>
             <Box sx={{ color: SEV_COLOR[e.severity], fontWeight: 800, width: 10 }}>{SEV_ICON[e.severity]}</Box>
-            <Box sx={{ color: e.severity === 'error' ? '#fecaca' : '#cbd5e1', flex: 1 }}>{e.message}</Box>
+            <Box sx={{ color: e.severity === 'error' ? '#fecaca' : '#cbd5e1', flex: 1 }}>
+              {e.type === 'ORACLE_SYNC' && (
+                <Box component="span" sx={{ bgcolor: '#6d28d9', color: 'white', px: 0.5, mr: 0.5, borderRadius: 0.5, fontSize: 9.5, fontWeight: 800 }}>ORACLE</Box>
+              )}
+              {e.type === 'RFID_READ' && (
+                <Box component="span" sx={{ bgcolor: '#0e7490', color: 'white', px: 0.5, mr: 0.5, borderRadius: 0.5, fontSize: 9.5, fontWeight: 800 }}>RFID</Box>
+              )}
+              {e.message}
+            </Box>
           </Box>
         ))}
       </Box>

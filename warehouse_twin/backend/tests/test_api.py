@@ -5,7 +5,7 @@ os.environ["DATABASE_URL"] = "sqlite:///" + os.path.join(tempfile.mkdtemp(), "t.
 
 from fastapi.testclient import TestClient  # noqa: E402
 
-from app.main import app, db, sim  # noqa: E402
+from app.main import app, db, sim, sim_lock  # noqa: E402
 
 
 def test_api_round_trip():
@@ -19,8 +19,9 @@ def test_api_round_trip():
         assert c.post("/api/ops/order", json={"order": "SO-45892"}).json()["status"] == "RELEASED"
         assert c.post("/api/ops/pick", json={}).json()["status"] == "PICKING"
         assert c.post("/api/ops/gate", json={}).status_code == 409
-        for _ in range(4000):
-            sim.step(0.25)
+        with sim_lock:  # keep the app's own simulation loop out while we fast-forward
+            for _ in range(4000):
+                sim.step(0.25)
         db.flush()
         stats = c.get("/api/db/stats").json()["tables"]
         assert stats["movement_event"] > 0 and stats["simulation_event"] > 0

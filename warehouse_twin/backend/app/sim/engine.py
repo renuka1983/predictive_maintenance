@@ -528,7 +528,9 @@ class Simulation:
         for bid in o["bundles"]:
             self.bundles[bid]["reserved"] = o["order_number"]
         self.kpi["orders_released"] += 1
-        self.oracle.pick_release_message(o, self.now())
+        rel = self.oracle.pick_release_message(o, self.now())
+        self.emit("ORACLE_SYNC", f"Oracle ⇒ {rel['interface']}: {o['order_number']} released to the warehouse",
+                  "info", order=o["order_number"], oracle=rel["interface"], oracle_id=rel["id"])
         self.emit("ORDER_RECEIVED", f"Oracle order {o['order_number']} received (pick release) — {o['customer']}, "
                   f"{len(o['bundles'])} bundles of {o['lines'][0]['description']}", "info", order=o["order_number"])
         locs = []
@@ -929,10 +931,13 @@ class Simulation:
             self.trucks[ep[1]]["epcs_on_board"] = self._truck_epcs(ep[1])
         self._persist_bundle_loc(b)
         self._movement("PICKUP", b, f, task, code)
-        self.emit("RFID_READ", f"{f.id} fork reader confirmed EPC {b['epc'][-8:]} ({b['barcode']})", "info",
-                  forklift=f.id, bundle=b["id"], epc=b["epc"], x=f.x, z=f.z, rfid=True)
+        task["pick_capture"] = self._capture(f, b, code)
+        self.emit("RFID_READ", f"{f.id} fork reader confirmed EPC {b['epc'][-8:]} = barcode {b['barcode']} at {code}",
+                  "info", forklift=f.id, bundle=b["id"], epc=b["epc"], barcode=b["barcode"], location=code,
+                  x=f.x, z=f.z, rfid=True)
         self.emit("BUNDLE_PICKED", f"{f.id} picked {b['barcode']} from {code}", "info", forklift=f.id, bundle=b["id"],
-                  order=task["order"], task=task["id"], task_type=task["type"], location=code)
+                  order=task["order"], task=task["id"], task_type=task["type"], location=code, epc=b["epc"],
+                  barcode=b["barcode"])
         self.emit("STACK_UPDATED", f"{self.ep_label(ep)} now holds {len(lst)} bundle(s)", "info", bundle=b["id"],
                   stack=ep[1] if ep[0] == "S" else None, op="pick", forklift=f.id, order=task["order"],
                   task_type=task["type"])
@@ -963,14 +968,27 @@ class Simulation:
         self.inv_version += 1
         self._persist_bundle_loc(b)
         self._movement("PLACE", b, f, task, code)
+        o = self.orders.get(task["order"]) if task["order"] else None
+        cap = self._capture(f, b, code)
+        msg = None
+        if task["type"] == "PUTAWAY" or (task["type"] == "UNLOAD"):
+            msg = self.oracle.putaway_message(b, self.now(), task.get("from_code"), code, cap)
+        elif task["type"] == "RELOCATE":
+            msg = self.oracle.relocation_message(b, self.now(), task.get("from_code"), code, cap)
+        elif task["type"] == "PICK" and o:
+            msg = self.oracle.move_order_message(o, b, self.now(), task["from_code"], code, cap)
+        elif task["type"] == "LOAD" and o:
+            tr = self.trucks[ep[1]]
+            msg = self.oracle.load_confirm_message(o, b, self.now(), tr["id"], tr["plate"], code, cap)
         self.emit("BUNDLE_PLACED", f"{f.id} placed {b['barcode']} at {code}", "success", forklift=f.id,
-                  bundle=b["id"], order=task["order"], task=task["id"], task_type=task["type"], location=code)
+                  bundle=b["id"], order=task["order"], task=task["id"], task_type=task["type"], location=code,
+                  epc=b["epc"], barcode=b["barcode"], oracle=msg["interface"] if msg else None)
+        if msg:
+            self._oracle_sync(msg, b, f, task["order"])
         self.emit("STACK_UPDATED", f"Twin updated: {b['barcode']} → {code}", "info", bundle=b["id"],
                   stack=ep[1] if ep[0] == "S" else None, op="place", forklift=f.id, order=task["order"],
                   task_type=task["type"])
-        o = self.orders.get(task["order"]) if task["order"] else None
         if task["type"] == "PICK" and o:
-            self.oracle.move_order_message(o, b, self.now(), task["from_code"], code)
             self.emit("BUNDLE_STAGED", f"{b['barcode']} staged in {o.get('lane')} for {o['order_number']}", "success",
                       bundle=b["id"], order=o["order_number"], forklift=f.id)
             if all(self.bundles[x]["status"] == "STAGED" for x in o["bundles"]):
@@ -990,6 +1008,21 @@ class Simulation:
                       truck=ep[1], forklift=f.id)
         if task["type"] == "UNLOAD":
             b["reserved"] = None
+
+    def _capture(self, f: Forklift, b: dict, code: str) -> dict:
+        """What the forklift itself records at the stack face: the RFID EPC read by its fork
+        antennas (cross-checked against the barcode/LPN) and its UWB position, resolved to a
+        location code."""
+        return {"forklift": f.id, "rfid_epc_read": b["epc"], "barcode": b["barcode"],
+                "rssi_dbm": round(self.rng.uniform(-58, -38), 1), "reader": "fork antenna pair",
+                "uwb_position_m": {"x": round(f.x, 2), "y": round(f.fork, 2), "z": round(f.z, 2)},
+                "uwb_accuracy_cm": round(5 + 6 * self.rng.random(), 1), "resolved_location": code,
+                "captured_at": self.ts()}
+
+    def _oracle_sync(self, msg: dict, b: dict, f: Forklift | None, order: str | None = None):
+        self.emit("ORACLE_SYNC", f"Oracle ⇐ {msg['interface']}: {b['barcode']} → {msg['payload'].get('to_locator') or msg['payload'].get('load_position', '')}",
+                  "success", bundle=b["id"], forklift=f.id if f else None, order=order, oracle=msg["interface"],
+                  oracle_id=msg["id"])
 
     def _movement(self, kind: str, b: dict, f: Forklift, task: dict, code: str):
         if self.db is not None:
@@ -1545,7 +1578,10 @@ class Simulation:
             tr["state"] = "AUTHORIZED"
             tr["path"] = [L.TRUCK_HOLD, L.TRUCK_EXIT]
             tr["on_arrive"] = "exit"
-            self.oracle.ship_confirm_message(o, mf, self.now())
+            sc = self.oracle.ship_confirm_message(o, mf, self.now())
+            self.emit("ORACLE_SYNC", f"Oracle ⇐ {sc['interface']}: delivery {mf['delivery_id']} shipped on {tr['plate']} "
+                      f"({len(actual)} LPNs RFID-verified)", "success", order=o["order_number"], oracle=sc["interface"],
+                      oracle_id=sc["id"], truck=tr["id"])
             self.emit("DISPATCH_VALIDATED", f"Dispatch AUTHORIZED: all {len(expected)} bundles of {o['order_number']} "
                       f"verified by RFID — Oracle ship confirm sent", "success", order=o["order_number"],
                       truck=tr["id"], manifest=mf["id"])
@@ -1562,7 +1598,9 @@ class Simulation:
                    "manifest": mf["id"], "missing": missing, "unexpected": unexpected, "ts": self.ts(), "t": self.t,
                    "resolved": False}
             self.exceptions.append(exc)
-            self.oracle.exception_message(o, mf, result, self.now())
+            hold = self.oracle.exception_message(o, mf, result, self.now())
+            self.emit("ORACLE_SYNC", f"Oracle ⇐ {hold['interface']}: delivery {mf['delivery_id']} placed on hold (RFID mismatch)",
+                      "warning", order=o["order_number"], oracle=hold["interface"], oracle_id=hold["id"], truck=tr["id"])
             parts = []
             if missing:
                 parts.append(f"{len(missing)} missing ({', '.join(m['barcode'] for m in missing)})")

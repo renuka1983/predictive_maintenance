@@ -126,6 +126,30 @@ straight after a reset, and SO-45892 is set up for scenario ②.
 * Forklifts route over an aisle graph through the warehouse-to-yard door. Routes are planned with
   Dijkstra. Each job locks the stacks it uses, so jobs never conflict on a stack.
 
+## What the forklift captures, and how Oracle is updated
+
+At every pick-up and placement the forklift itself produces an evidence record:
+
+* the RFID EPC read by its fork antennas, matched to the bundle barcode (LPN), with read strength
+* its UWB position (x, y, z, accuracy), resolved by the twin into a location code
+  (`PL01-WH01-Z02-B005-S01-L02`: plant, warehouse, zone, bay, stack, level)
+* the forklift ID and timestamp
+
+A card above the forklift shows the record as it is captured (cyan for pick-up, green for
+placement). The same record is stored in the database and attached to the Oracle transaction:
+
+| Moment | Oracle interface (mock adapter) | Direction |
+|---|---|---|
+| Putaway placement, or returning a wrongly loaded bundle | INV Subinventory Transfer (Putaway) | out |
+| Customer order released | OE_ORDER_PUB → Pick Release | in |
+| Rehandle of a blocking bundle | INV Locator Transfer (Rehandle) | out |
+| Bundle placed in a staging lane | INV Move Order Transaction (Pick Confirm) | out |
+| Bundle loaded on the truck | WSH Load Confirm (LPN to truck) | out |
+| RFID gate validated or blocked | WSH Ship Confirm, or WSH Delivery Hold | out |
+
+The live event stream tags these lines `ORACLE` and `RFID`. **Orders → Oracle ERP integration
+log** shows every message with its full payload, filterable by putaway, picking or dispatch.
+
 ## Forklift traffic management
 
 Forklifts never meet head-on in the same path:

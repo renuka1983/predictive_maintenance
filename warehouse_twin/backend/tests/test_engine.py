@@ -105,3 +105,30 @@ def test_reset_restores_seed(sim):
     sim.reset()
     assert sim.orders["SO-45892"]["status"] == "BOOKED"
     assert sim.kpi["picks"] == 0
+
+
+def test_oracle_transactions_carry_the_forklift_capture(sim):
+    """Putaway, pick confirm and load confirm messages include what the forklift read and where."""
+    sim.start_scenario(1)
+    assert run(sim, 300, until=lambda s: s.scenario["status"] == "DONE")
+    sim.start_scenario(2)
+    assert run(sim, 900, until=lambda s: s.scenario["status"] == "DONE")
+    sim.start_scenario(3)
+    assert run(sim, 600, until=lambda s: s.orders["SO-45891"]["status"] == "DISPATCHED")
+    kinds = {}
+    for m in sim.oracle.log:
+        p = m["payload"]
+        cap = p.get("capture")
+        if cap is None:
+            continue
+        kinds[m["interface"]] = kinds.get(m["interface"], 0) + 1
+        b = next(x for x in sim.bundles.values() if x["barcode"] == p["lpn"])
+        assert cap["rfid_epc_read"] == p["epc"] == b["epc"]
+        assert cap["barcode"] == p["lpn"]
+        assert cap["resolved_location"] == p.get("to_locator", p.get("load_position"))
+        assert set(cap["uwb_position_m"]) == {"x", "y", "z"}
+    assert any("Putaway" in k for k in kinds)
+    assert any("Pick Confirm" in k for k in kinds)
+    assert any("Load Confirm" in k for k in kinds)
+    assert any("Ship Confirm" in m["interface"] for m in sim.oracle.log)
+    assert any(e["type"] == "ORACLE_SYNC" for e in sim.events)

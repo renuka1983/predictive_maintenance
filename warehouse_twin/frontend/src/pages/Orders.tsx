@@ -1,20 +1,26 @@
 import { useEffect, useState } from 'react';
-import { Box, Button, LinearProgress, Tab, Table, TableBody, TableCell, TableHead, TableRow, Tabs, Typography } from '@mui/material';
+import { Box, Button, LinearProgress, Tab, Table, TableBody, TableCell, TableHead, TableRow, Tabs, ToggleButton, ToggleButtonGroup, Typography } from '@mui/material';
 import { api } from '../api';
 import { useStore } from '../store';
 import { Card, KV, StatusChip, clock, mono } from '../components/common';
 import { locateBundle } from '../components/TwinPanels';
 
+const LOG_FILTERS: Record<string, RegExp> = { All: /./, Putaway: /Putaway|Rehandle/, Picking: /Pick/, Dispatch: /WSH/ };
+
 function OracleLog() {
   const [log, setLog] = useState<any[]>([]);
   const [open, setOpen] = useState<number | null>(null);
+  const [filter, setFilter] = useState('All');
   const events = useStore((s) => s.events.length);
-  useEffect(() => { api.get('/api/oracle/log').then(setLog).catch(() => null); }, [events]);
+  useEffect(() => { api.get('/api/oracle/log?limit=200').then(setLog).catch(() => null); }, [events]);
   return (
     <Card title="Oracle ERP integration log (mock adapter)">
       <Typography sx={{ fontSize: 11.5, color: '#64748b', mb: 1 }}>Messages a production Oracle EBS / Fusion interface would exchange. Click to inspect the payload.</Typography>
-      <Box sx={{ maxHeight: 420, overflow: 'auto' }}>
-        {log.map((m) => (
+      <ToggleButtonGroup size="small" exclusive value={filter} onChange={(_, v) => v && setFilter(v)} sx={{ mb: 1 }}>
+        {Object.keys(LOG_FILTERS).map((k) => <ToggleButton key={k} value={k} sx={{ py: 0.2, px: 1.2, fontSize: 11.5, textTransform: 'none' }}>{k}</ToggleButton>)}
+      </ToggleButtonGroup>
+      <Box sx={{ maxHeight: 520, overflow: 'auto' }}>
+        {log.filter((m) => LOG_FILTERS[filter].test(m.interface)).map((m) => (
           <Box key={m.id} onClick={() => setOpen(open === m.id ? null : m.id)} sx={{ py: 0.5, borderBottom: '1px solid #1e293b', cursor: 'pointer', fontSize: 12 }}>
             <Box sx={{ display: 'flex', gap: 1 }}>
               <Box sx={{ ...mono, color: '#64748b' }}>{clock(m.ts)}</Box>

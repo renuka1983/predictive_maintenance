@@ -5,6 +5,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import threading
 import time
 from typing import Optional
 
@@ -44,6 +45,9 @@ class Hub:
 db = Persistence(config.DATABASE_URL, enabled=config.PERSISTENCE_ENABLED)
 sim = Simulation(seed=config.SIM_SEED, persistence=db, speed=config.DEFAULT_SPEED)
 hub = Hub()
+# Held while the background loop advances the simulation, so code outside the event loop
+# (tests, scripts) can step it without racing the loop.
+sim_lock = threading.Lock()
 
 
 async def sim_loop():
@@ -57,7 +61,8 @@ async def sim_loop():
         await asyncio.sleep(tick)
         now = time.perf_counter()
         try:
-            sim.step(now - last)
+            with sim_lock:
+                sim.step(now - last)
         except Exception:  # keep the demo alive; surface the failure in the log
             log.exception("simulation step failed")
         last = now
