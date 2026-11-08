@@ -1,0 +1,38 @@
+# Warehouse Digital Twin PoC: PostgreSQL + FastAPI simulation backend + React/Three.js frontend.
+#   docker compose up --build      ->  http://localhost:8080
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: twin
+      POSTGRES_PASSWORD: twin
+      POSTGRES_DB: warehouse_twin
+    volumes:
+      - twin_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U twin -d warehouse_twin"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  backend:
+    build: ./backend
+    environment:
+      DATABASE_URL: postgresql+psycopg2://twin:twin@db:5432/warehouse_twin
+      SIM_SEED: "42"
+      SIM_DEFAULT_SPEED: "3"
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "8080:80"
+    depends_on:
+      - backend
+
+volumes:
+  twin_pg:
