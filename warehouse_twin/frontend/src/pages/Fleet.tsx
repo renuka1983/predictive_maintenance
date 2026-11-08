@@ -62,6 +62,9 @@ export default function Fleet() {
               </Box>
               <Typography sx={{ fontSize: 11, color: '#94a3b8' }}>{x.roleLabel}</Typography>
               <Typography sx={{ fontSize: 11.5, mt: 0.5, minHeight: 32 }}>{x.task ? `${x.task.type} · ${x.task.barcode}` : 'Idle'}{x.task?.order ? ` · ${x.task.order}` : ''}</Typography>
+              <Typography sx={{ fontSize: 11, color: x.yieldTo ? '#f59e0b' : '#64748b' }}>
+                {x.yieldTo ? `Yielding to ${x.yieldTo}` : 'Right of way'} · waited {x.waitS}s
+              </Typography>
               <Typography sx={{ fontSize: 11, color: '#94a3b8' }}>{x.warehouse} · ({x.x.toFixed(0)}, {x.z.toFixed(0)})</Typography>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 0.5 }}>
                 <Typography sx={{ fontSize: 10.5, color: '#94a3b8', width: 30 }}>Util</Typography>
@@ -86,6 +89,7 @@ export default function Fleet() {
           <KV k="Load" v={f.loadBarcode ?? 'Empty'} />
           <KV k="Position" v={`x ${f.x.toFixed(2)}, z ${f.z.toFixed(2)} · heading ${((f.h * 180) / Math.PI).toFixed(0)}° · forks ${f.fork.toFixed(2)} m`} />
           <KV k="UWB fix" v={`±${Math.round(f.uwbErr * 100)} cm`} />
+          <KV k="Traffic" v={`${f.yieldTo ? `yielding to ${f.yieldTo}` : 'right of way'} · ${f.waitS}s waited this shift`} />
           <KV k="Tasks / distance" v={`${f.done} · ${(f.distance / 1000).toFixed(2)} km`} />
           <Typography sx={{ fontSize: 11, fontWeight: 800, color: '#64748b', mt: 1.5, mb: 0.5 }}>MOVEMENT HISTORY</Typography>
           <Table size="small">

@@ -54,7 +54,8 @@ cd warehouse_twin/backend && python -m pytest -q
 ```
 
 The tests cover all three scenarios, including the wrong-bundle and missing-bundle exception
-paths, a two-hour autopilot run with stack and location invariants, and an API/WebSocket
+paths, a two-hour autopilot run with stack and location invariants, the traffic rules (lanes,
+fork-side choice, a head-on and contact budget over an autopilot hour), and an API/WebSocket
 round trip.
 
 ## What the customer sees
@@ -124,6 +125,35 @@ straight after a reset, and SO-45892 is set up for scenario ②.
 * Only mill-finish profiles may be stored outdoors. Anodized and painted profiles stay indoors.
 * Forklifts route over an aisle graph through the warehouse-to-yard door. Routes are planned with
   Dijkstra. Each job locks the stacks it uses, so jobs never conflict on a stack.
+
+## Forklift traffic management
+
+Forklifts never meet head-on in the same path:
+
+* **Right-hand traffic lanes.** Every aisle and corridor carries two lanes, 1.6 m either side of the
+  centre line (white chevrons on the floor). Routes are offset onto the lane on the right of the
+  direction of travel, with mitred corners at junctions.
+* **Long loads travel lengthwise.** A loaded forklift drives sideways (multi-directional / sideloader
+  style), so the 6 m bundle lies along the aisle instead of across it. For each leg the planner
+  chooses whether the forks point right or left of travel, to minimise turning with the bundle. For
+  example, it arrives already facing a stack on the left. Forks-left travel uses a 3.0 m lane
+  offset, so the forklift occupies the same band of its own lane either way. Empty forklifts drive
+  forwards.
+* **Look-ahead yielding.** Every 0.15 s each moving forklift checks the footprint (chassis, forks
+  and bundle) it will sweep over the next few metres, including turning arcs. If that footprint
+  would touch another forklift, it stops and yields. A forklift about to turn on the spot claims
+  its whole turning circle, so nobody queues inside it.
+* **Right of way.** When two forklifts block each other, the loaded one goes first, then the one
+  that has waited longest. An idle forklift in the way is sent back to its parking bay. As a last
+  resort, a forklift that has waited 15 s creeps past slowly. This happens a few times an hour.
+* **Parking.** Each forklift has its own bay off a parking spur and reverses in. Reaching a bay
+  never means driving through another parked forklift.
+
+Measured over six simulated autopilot hours against the previous version (no lanes, no yielding):
+overlaps between moving forklifts travelling in opposite directions fell from 2,313 to 52 (−98 %).
+Overlaps of any kind fell from 8,896 to 1,016 (−89 %). Throughput was unchanged (82 vs 81 trucks,
+366 vs 361 picks). While a forklift waits, its label turns amber and reads `yielding to F-0x`. The
+Fleet page and Analytics report yields and waiting time.
 * The putaway rule consolidates bundles by sales order. It avoids burying bundles of orders that
   will ship earlier, which keeps future rehandles low.
 

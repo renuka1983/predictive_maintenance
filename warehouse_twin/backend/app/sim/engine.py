@@ -23,6 +23,7 @@ from datetime import datetime, timedelta
 
 from .. import layout as L
 from ..oracle_mock import CUSTOMERS, PRODUCT_BY_CODE, PRODUCTS, MockOracle, iso
+from .traffic import PARKED_FRONT, bbox, footprint, overlap, overlap_bb
 
 SIM_START = datetime(2026, 11, 9, 7, 30, 0)
 CARRY_H = 0.35
@@ -33,6 +34,13 @@ SPEED_APPROACH = 1.0
 FORK_SPEED = 0.7
 TURN_RATE = 1.9
 TRUCK_SPEED = 6.0
+TRAFFIC_INTERVAL = 0.15   # s between traffic-manager evaluations
+ROT_S = 1.2               # look-ahead progress per radian turned on the spot (m/rad)
+SAMPLE = 0.5              # m between sampled footprints along a path
+MARGIN = 0.25             # m clearance kept between footprints
+LOOK_BASE, LOOK_TIME = 2.0, 1.5  # look-ahead horizon: base + speed x time
+ARC_CLAIM = 1.5           # m of upcoming path within which a turn on the spot counts as occupied space
+YIELD_TIMEOUT = 15.0      # s a forklift may wait before the deadlock breaker lets it creep through
 
 ROLE_LABEL = {"PUTAWAY": "Inbound / Putaway", "PICKING": "Outbound / Picking & Dispatch"}
 ACTIVE_TRUCK_STATES = {"ARRIVING", "AT_DOCK", "LOADED", "TO_GATE", "READING", "EXCEPTION", "RETURNING", "AUTHORIZED"}
@@ -68,6 +76,10 @@ class Forklift:
         self.at_park = True
         self.track: list = []
         self.dest: dict | None = None
+        self.yield_to: str | None = None
+        self.wait_time = 0.0
+        self.total_wait = 0.0
+        self.ghost_until = -1.0
 
 
 class Simulation:
@@ -123,11 +135,15 @@ class Simulation:
         self.kpi = {"putaways": 0, "picks": 0, "relocations": 0, "loads": 0, "unloads": 0, "trucks_dispatched": 0,
                     "bundles_dispatched": 0, "gate_validations": 0, "first_pass_ok": 0, "exceptions": 0,
                     "exceptions_resolved": 0, "rfid_reads": 0, "orders_released": 0, "orders_staged": 0,
-                    "produced": 0}
+                    "produced": 0, "yields": 0, "deadlock_breaks": 0}
         self.cycle = {"PUTAWAY": [], "PICK": [], "ORDER": [], "TRUCK": []}
         self.series: list[dict] = []
         self._next_sample = 0.0
         self.auto_gate_once = False
+        self._blocked: dict[str, str] = {}
+        self._traffic_at = -1.0
+        self._pending_carry = None
+        self._last_traffic = -1.0
         self._awaiting_location: list[str] = []
         self._seed_world()
         if self.db is not None:
@@ -593,15 +609,24 @@ class Simulation:
         f.job = deque(tasks)
         f.job_id = jid
         f.job_locks = [self.lock_key(ep) for ep in locks]
+        carry = None
+        if f.actions and f.actions[0]["k"] == "move":  # interrupted on the way home: reach the next junction first
+            a = f.actions[0]
+            if a["i"] < len(a["pts"]) and a["nodes"][a["i"]]:
+                carry = {**a, "pts": [a["pts"][a["i"]]], "nodes": [a["nodes"][a["i"]]], "modes": [a["modes"][a["i"]]], "i": 0}
         f.actions.clear()
         f.at_park = False
         first = tasks[0]
         b = self.bundles[first["bundle"]]
         kinds = " + ".join(dict.fromkeys(t["type"] for t in tasks))
+        self._pending_carry = carry
         self.emit("TASK_ASSIGNED", f"{f.id} assigned {kinds} for {b['barcode']} ({self.ep_label(first['src'])} → "
                   f"{self.ep_label(tasks[-1]['dst'])})", "info", forklift=f.id, bundle=first["bundle"],
                   order=tasks[-1]["order"], task=first["id"], task_type=tasks[-1]["type"])
         self._start_next_task(f)
+        if self._pending_carry:
+            f.actions.appendleft(self._pending_carry)
+            self._pending_carry = None
 
     def _try_assign(self, req: dict) -> bool:
         b = self.bundles.get(req["bundle"])
@@ -675,22 +700,108 @@ class Simulation:
                 self._send_home(f)
 
     # ============================================================ forklift actions
-    def _plan(self, f: Forklift, node: str, final: list[tuple]) -> dict:
+    def _lane_polyline(self, route: list[str], left: list[bool] | None = None) -> list[tuple]:
+        """Offset a node route onto right-hand traffic lanes. Returns [(point, node_id)]."""
+        lay = self.layout
+        P = [lay.nodes[n] for n in route]
+        if len(P) < 2:
+            return [(P[0], route[0], 0)]
+        dirs, norms, offs = [], [], []
+        for i in range(len(P) - 1):
+            dx, dz = P[i + 1][0] - P[i][0], P[i + 1][1] - P[i][1]
+            d = math.hypot(dx, dz) or 1.0
+            dirs.append((dx / d, dz / d))
+            norms.append((-dz / d, dx / d))  # right-hand side of travel
+            offs.append(lay.lane_offset(route[i], route[i + 1], bool(left and left[i])))
+        out = [((P[0][0] + norms[0][0] * offs[0], P[0][1] + norms[0][1] * offs[0]), route[0], 0)]
+        for i in range(1, len(P) - 1):
+            (ax, az), (bx, bz) = norms[i - 1], norms[i]
+            oa, ob = offs[i - 1], offs[i]
+            dot = ax * bx + az * bz
+            if oa == ob and dot > -0.5:
+                k = oa / (1 + dot)  # mitred corner
+                out.append(((P[i][0] + (ax + bx) * k, P[i][1] + (az + bz) * k), route[i], i - 1))
+            else:  # lane change or U-turn: leave one lane, join the other
+                out.append(((P[i][0] + ax * oa, P[i][1] + az * oa), route[i], i - 1))
+                out.append(((P[i][0] + bx * ob, P[i][1] + bz * ob), route[i], i))
+        n, o = norms[-1], offs[-1]
+        out.append(((P[-1][0] + n[0] * o, P[-1][1] + n[1] * o), route[-1], len(P) - 2))
+        return out
+
+    def _fork_sides(self, f: Forklift, route: list[str], final_heading: float | None) -> list[bool]:
+        """Choose, per route segment, whether a loaded forklift drives sideways with its forks to
+        the right or to the left of travel, minimising total turning (a long load swept through a
+        half circle blocks both lanes). Returns forks_left per segment."""
+        P = [self.layout.nodes[n] for n in route]
+        segs = [(P[i + 1][0] - P[i][0], P[i + 1][1] - P[i][1]) for i in range(len(P) - 1)]
+        if not segs:
+            return []
+        def hd(i, left):
+            dx, dz = segs[i]
+            return L.heading_of(dz, -dx) if left else L.heading_of(-dz, dx)
+        cost = {False: abs(angdiff(hd(0, False), f.heading)), True: abs(angdiff(hd(0, True), f.heading)) + 0.01}
+        back = []
+        for i in range(1, len(segs)):
+            nxt, bp = {}, {}
+            for side in (False, True):
+                opts = [(cost[ps] + abs(angdiff(hd(i, side), hd(i - 1, ps))) + (0.01 if side else 0), ps) for ps in (False, True)]
+                nxt[side], bp[side] = min(opts)
+            back.append(bp)
+            cost = nxt
+        if final_heading is not None:
+            cost = {sd: c + abs(angdiff(final_heading, hd(len(segs) - 1, sd))) for sd, c in cost.items()}
+        side = min(cost, key=cost.get)
+        out = [side]
+        for bp in reversed(back):
+            side = bp[side]
+            out.append(side)
+        return out[::-1]
+
+    def _plan(self, f: Forklift, node: str, final: list[tuple], final_modes: list[str] | None = None,
+              final_heading: float | None = None) -> dict:
+        """Route on the aisle graph using right-hand lanes.
+
+        Travel modes per leg: ``side`` = loaded long-load travel (driving sideways, forks to the
+        right, bundle parallel to the aisle); ``fwd`` = drive forwards; ``auto`` = move without
+        turning (reverse out of a stack face or bay).
+        """
         lay = self.layout
         starts = [f.node] + ([f.next_node] if f.next_node and f.next_node != f.node else [])
         best = None
-        for s in starts:
-            r = lay.route(s, node)
+        for st in starts:
+            r = lay.route(st, node)
             pts = [lay.nodes[n] for n in r]
             d = math.hypot(pts[0][0] - f.x, pts[0][1] - f.z) + sum(
                 math.hypot(a[0] - b[0], a[1] - b[1]) for a, b in zip(pts, pts[1:]))
             if best is None or d < best[0]:
                 best = (d, r)
         route = best[1]
-        pts = [lay.nodes[n] for n in route] + final
-        nodes = list(route) + [None] * len(final)
-        out_p, out_n = [], []
-        for p, n in zip(pts, nodes):
+        left = self._fork_sides(f, route, final_heading) if f.load else None
+        lane = self._lane_polyline(route, left)
+        while len(lane) >= 2:  # already past the first lane point (e.g. replanned at a corner)
+            (ax, az), (bx, bz) = lane[0][0], lane[1][0]
+            if math.hypot(ax - f.x, az - f.z) < 3.5 and (ax - f.x) * (bx - ax) + (az - f.z) * (bz - az) < 0:
+                if lane[0][1]:
+                    f.node = lane[0][1]
+                lane = lane[1:]
+            else:
+                break
+
+        def leg_mode(seg: int) -> str:
+            if left is None:
+                return "fwd"
+            return "sideL" if left[min(seg, len(left) - 1)] else "sideR"
+
+        pts = [p for p, _, _ in lane] + list(final)
+        nodes = [n for _, n, _ in lane] + [None] * len(final)
+        p0 = lane[0][0]
+        dx0, dz0 = p0[0] - f.x, p0[1] - f.z
+        d0 = math.hypot(dx0, dz0)
+        aligned = d0 < 0.05 or abs(dx0 / d0 * math.cos(f.heading) - dz0 / d0 * math.sin(f.heading)) > 0.95
+        first = "auto" if aligned else leg_mode(lane[0][2])  # back straight out, else turn and drive
+        modes = [first] + [leg_mode(seg) for _, _, seg in lane[1:]] + list(final_modes or ["fwd"] * len(final))
+        out_p, out_n, out_m = [], [], []
+        for p, n, md in zip(pts, nodes, modes):
             last = out_p[-1] if out_p else (f.x, f.z)
             if math.hypot(p[0] - last[0], p[1] - last[1]) < 0.05:
                 if n and out_n:
@@ -700,21 +811,25 @@ class Simulation:
                 continue
             out_p.append(p)
             out_n.append(n)
-        return {"k": "move", "pts": out_p, "nodes": out_n, "i": 0, "rev": False,
+            out_m.append(md)
+        return {"k": "move", "pts": out_p, "nodes": out_n, "modes": out_m, "i": 0,
                 "speed": SPEED_LOADED if f.load else SPEED_EMPTY}
 
     def _goto_ep(self, f: Forklift, ep: tuple) -> list:
         g = self.ep_geom(ep)
         f.dest = {"x": g["pre"][0], "z": g["pre"][1], "label": self.ep_label(ep)}
-        return [self._plan(f, g["node"], [g["pre"]])]
+        mv = self._plan(f, g["node"], [g["pre"]], final_heading=g["heading"])
+        mv["ep"] = ep
+        return [mv]
 
     def _send_home(self, f: Forklift):
         p = f.park
         f.state = "RETURNING"
         f.dest = {"x": p["x"], "z": p["z"], "label": f"Parking {p['id']}"}
         f.actions = deque([
-            {"k": "expand", "fn": lambda: [self._plan(f, p["node"], [(p["x"], p["z"])])]},
+            {"k": "expand", "fn": lambda: [self._plan(f, p["node"], [])]},
             {"k": "turn", "h": p["heading"]},
+            {"k": "move", "pts": [(p["x"], p["z"])], "nodes": [None], "modes": ["auto"], "i": 0, "speed": SPEED_APPROACH},
             {"k": "call", "fn": lambda: self._parked(f)},
         ])
 
@@ -775,10 +890,10 @@ class Simulation:
         return [
             {"k": "turn", "h": g["heading"]},
             {"k": "fork", "h": bottom - 0.06},
-            {"k": "move", "pts": [g["app"]], "nodes": [None], "i": 0, "rev": False, "speed": SPEED_APPROACH},
+            {"k": "move", "pts": [g["app"]], "nodes": [None], "modes": ["fwd"], "i": 0, "speed": SPEED_APPROACH},
             {"k": "call", "fn": lambda: self._attach(f, task, ep, level)},
             {"k": "fork", "h": bottom + 0.1},
-            {"k": "move", "pts": [g["pre"]], "nodes": [None], "i": 0, "rev": True, "speed": SPEED_APPROACH},
+            {"k": "move", "pts": [g["pre"]], "nodes": [None], "modes": ["auto"], "i": 0, "speed": SPEED_APPROACH},
             {"k": "fork", "h": CARRY_H},
         ]
 
@@ -789,10 +904,10 @@ class Simulation:
         return [
             {"k": "turn", "h": g["heading"]},
             {"k": "fork", "h": bottom + 0.06},
-            {"k": "move", "pts": [g["app"]], "nodes": [None], "i": 0, "rev": False, "speed": SPEED_APPROACH},
+            {"k": "move", "pts": [g["app"]], "nodes": [None], "modes": ["fwd"], "i": 0, "speed": SPEED_APPROACH},
             {"k": "fork", "h": bottom - 0.06},
             {"k": "call", "fn": lambda: self._detach(f, task, ep)},
-            {"k": "move", "pts": [g["pre"]], "nodes": [None], "i": 0, "rev": True, "speed": SPEED_APPROACH},
+            {"k": "move", "pts": [g["pre"]], "nodes": [None], "modes": ["auto"], "i": 0, "speed": SPEED_APPROACH},
             {"k": "fork", "h": LOW_H},
         ]
 
@@ -983,8 +1098,13 @@ class Simulation:
             f.heading += math.copysign(step, d)
             return dt
         if k == "move":
+            if f.id in self._blocked and f.ghost_until <= self.t:
+                self._waiting(f, dt)
+                return dt
+            f.yield_to = None
+            f.wait_time = 0.0
             used = 0.0
-            pts, nodes = a["pts"], a["nodes"]
+            pts, nodes, modes = a["pts"], a["nodes"], a["modes"]
             while used < dt - 1e-9 and a["i"] < len(pts):
                 tx, tz = pts[a["i"]]
                 dx, dz = tx - f.x, tz - f.z
@@ -996,17 +1116,15 @@ class Simulation:
                     f.track.append((round(tx, 2), round(tz, 2)))
                     a["i"] += 1
                     continue
-                if not a["rev"]:
-                    want = L.heading_of(dx, dz)
+                want = self._mode_heading(modes[a["i"]], dx, dz)
+                if want is not None:
                     diff = angdiff(want, f.heading)
-                    if abs(diff) > 0.12:
+                    if abs(diff) > 0.03:  # turn on the spot before moving (long loads sweep wide)
                         rot = min(abs(diff), TURN_RATE * (dt - used))
                         f.heading += math.copysign(rot, diff)
                         used += rot / TURN_RATE
-                        if abs(diff) > 0.5:
-                            continue
-                    else:
-                        f.heading = want
+                        continue
+                    f.heading = want
                 rem = dt - used
                 if rem <= 1e-9:
                     break
@@ -1021,6 +1139,127 @@ class Simulation:
             return used
         a["done"] = True
         return 0.0
+
+    @staticmethod
+    def _mode_heading(mode: str, dx: float, dz: float) -> float | None:
+        if mode in ("side", "sideR"):
+            return L.heading_of(-dz, dx)  # driving sideways, forks to the right, bundle parallel to travel
+        if mode == "sideL":
+            return L.heading_of(dz, -dx)  # driving sideways, forks to the left
+        if mode == "fwd":
+            return L.heading_of(dx, dz)
+        return None
+
+    # ============================================================ traffic manager
+    def _load_len(self, f: Forklift) -> float | None:
+        return self.bundles[f.load]["length_mm"] / 1000 if f.load else None
+
+    def _future_poses(self, f: Forklift, a: dict, look: float) -> tuple[list[tuple], bool]:
+        """Poses the forklift will pass through, as (progress, x, z, heading). Progress counts metres
+        travelled plus turning (ROT_S metres per radian). Returns (poses, path_ends_within_look)."""
+        poses = []
+        x, z, h = f.x, f.z, f.heading
+        pts, modes = a["pts"], a["modes"]
+        i, prog, nxt = a["i"], 0.0, SAMPLE
+        while i < len(pts):
+            tx, tz = pts[i]
+            dx, dz = tx - x, tz - z
+            d = math.hypot(dx, dz)
+            if d < 1e-6:
+                i += 1
+                continue
+            want = self._mode_heading(modes[i], dx, dz)
+            if want is not None and abs(angdiff(want, h)) > 0.03:
+                diff = angdiff(want, h)
+                n = max(1, math.ceil(abs(diff) / 0.25))
+                for k in range(n):
+                    prog += abs(diff) / n * ROT_S
+                    poses.append((prog, x, z, h + diff * (k + 1) / n))
+                h = want
+                nxt = prog + SAMPLE
+            elif want is not None:
+                h = want
+            while nxt <= prog + d:
+                u = (nxt - prog) / d
+                poses.append((nxt, x + dx * u, z + dz * u, h))
+                nxt += SAMPLE
+            prog += d
+            poses.append((prog, tx, tz, h))
+            nxt = prog + SAMPLE
+            x, z = tx, tz
+            i += 1
+            if prog > look:
+                return poses, False
+        return poses, True
+
+    def _prio(self, f: Forklift) -> tuple:
+        # right of way: loaded before empty, then whoever has waited longest
+        return (f.load is not None, round(f.wait_time, 1), f.id)
+
+    def _waiting(self, f: Forklift, dt: float):
+        blocker = self._blocked.get(f.id)
+        if blocker and f.yield_to != blocker:
+            self.kpi["yields"] += 1
+        f.yield_to = blocker
+        f.wait_time += dt
+        f.total_wait += dt
+        if f.wait_time > YIELD_TIMEOUT:  # deadlock breaker: creep past slowly
+            f.ghost_until = self.t + 4.0
+            f.wait_time = 0.0
+            self.kpi["deadlock_breaks"] += 1
+
+    def _traffic(self):
+        """Each moving forklift checks the footprint it will sweep over the next few metres
+        (including turning arcs). If that would touch another forklift it stops and yields.
+        When two forklifts block each other, the one with right of way goes first."""
+        self._traffic_at = self.t
+        fl = list(self.forklifts.values())
+        cur = {f.id: footprint(f.x, f.z, f.heading, self._load_len(f),
+                               PARKED_FRONT if f.at_park and not f.actions else 2.65) for f in fl}
+        cbb = {fid: bbox(p) for fid, p in cur.items()}
+        # space each forklift occupies, plus the arc it is about to sweep if it is about to turn on the
+        # spot (a follower must not close up inside a leader's turning circle)
+        occ = {f.id: [(cur[f.id], cbb[f.id])] for f in fl}
+        future: dict[str, list] = {}
+        for f in fl:
+            a = f.actions[0] if f.actions else None
+            if not a or a["k"] != "move" or a["i"] >= len(a["pts"]) or f.ghost_until > self.t:
+                continue
+            poses, _ = self._future_poses(f, a, LOOK_BASE + a["speed"] * LOOK_TIME)
+            if not poses:
+                continue
+            ll = self._load_len(f)
+            future[f.id] = [(fp, bbox(fp)) for fp in (footprint(x, z, h, ll) for _, x, z, h in poses)]
+            for idx, (prog, x, z, h) in enumerate(poses):
+                if prog > ARC_CLAIM:
+                    break
+                px, pz = (f.x, f.z) if idx == 0 else (poses[idx - 1][1], poses[idx - 1][2])
+                if abs(x - px) < 1e-6 and abs(z - pz) < 1e-6:  # turning on the spot
+                    occ[f.id].append(future[f.id][idx])
+        hits: dict[str, list[str]] = {}
+        for f in fl:
+            fps = future.get(f.id)
+            if not fps:
+                continue
+            for g in fl:
+                if g is f or abs(g.x - f.x) > 20 or abs(g.z - f.z) > 20:
+                    continue
+                if overlap_bb(cur[f.id], cbb[f.id], cur[g.id], cbb[g.id]):
+                    continue  # already touching: let them separate
+                if any(overlap_bb(fp, fb, op, ob, MARGIN) for fp, fb in fps for op, ob in occ[g.id]):
+                    hits.setdefault(f.id, []).append(g.id)
+        blocked = {}
+        for fid, gs in hits.items():
+            f = self.forklifts[fid]
+            for gid in gs:
+                if fid in hits.get(gid, []) and self._prio(f) > self._prio(self.forklifts[gid]):
+                    continue
+                blocked[fid] = gid
+                g = self.forklifts[gid]
+                if g.job is None and not g.actions and not g.at_park:  # idle forklift in the way
+                    self._send_home(g)
+                break
+        self._blocked = blocked
 
     def _step_forklift(self, f: Forklift, dt: float):
         rem = dt
@@ -1441,6 +1680,10 @@ class Simulation:
             if self.t - self._last_dispatch >= 0.5:
                 self._last_dispatch = self.t
                 self._dispatch()
+            if self.t - self._last_traffic >= TRAFFIC_INTERVAL:
+                self._last_traffic = self.t
+                if self._traffic_at != self.t:
+                    self._traffic()
             for f in self.forklifts.values():
                 self._step_forklift(f, dt)
             for tr in list(self.trucks.values()):
@@ -1634,7 +1877,7 @@ class Simulation:
              "dest": f.dest, "route": route, "battery": round(f.battery, 1),
              "util": round(100 * f.busy_time / self.t, 1) if self.t > 1 else 0.0,
              "distance": round(f.distance, 1), "done": f.tasks_done,
-             "warehouse": self._wh_at(f.x), "uwbErr": round(0.05 + 0.06 * abs(math.sin(self.t * 0.7 + hash(f.id) % 7)), 3)}
+             "warehouse": self._wh_at(f.x), "yieldTo": f.yield_to, "waitS": round(f.total_wait), "uwbErr": round(0.05 + 0.06 * abs(math.sin(self.t * 0.7 + hash(f.id) % 7)), 3)}
         if detail:
             d["history"] = list(f.history)
         return d

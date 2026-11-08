@@ -358,6 +358,7 @@ function ForkliftInfo({ id }: { id: string }) {
       <KV k="From → to" v={f.task ? `${f.task.from} → ${f.task.to}` : '—'} />
       <KV k="Destination" v={f.dest?.label} />
       <KV k="Order" v={f.task?.order} />
+      <KV k="Traffic" v={f.yieldTo ? `Yielding to ${f.yieldTo}` : 'Right of way'} />
       <KV k="Utilization / battery" v={`${f.util}% · ${f.battery}%`} />
       <KV k="Distance / tasks" v={`${(f.distance / 1000).toFixed(2)} km · ${f.done} tasks`} />
       <Typography sx={{ fontSize: 11, fontWeight: 800, color: '#64748b', mt: 1 }}>MOVEMENT HISTORY</Typography>

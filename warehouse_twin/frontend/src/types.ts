@@ -19,6 +19,8 @@ export interface Layout {
   gate: { x: number; z: number; width: number; height: number };
   graph: { nodes: Record<string, [number, number]>; edges: [string, string][] };
   lanes: Record<string, string[]>;
+  laneOffset: number;
+  nolane: [string, string][];
 }
 
 export interface ForkliftTask { id: string; type: string; bundle: string; barcode: string; order: string | null; from: string; to: string }
@@ -27,6 +29,7 @@ export interface ForkliftLive {
   x: number; z: number; h: number; fork: number; load: string | null; loadBarcode: string | null;
   task: ForkliftTask | null; queued: number; dest: { x: number; z: number; label: string } | null;
   route: [number, number][]; battery: number; util: number; distance: number; done: number; warehouse: string; uwbErr: number;
+  yieldTo: string | null; waitS: number;
   history?: HistoryEntry[];
 }
 export interface HistoryEntry {

@@ -34,6 +34,7 @@ export default function Analytics() {
         <Stat label="Exceptions caught at gate" value={k.exceptions} sub={`${k.exceptions_resolved} resolved before departure`} />
         <Stat label="RFID reads" value={k.rfid_reads} sub="fork readers + gate" />
         <Stat label="Order cycle" value={fmtS(a.cycle_avg_s.ORDER)} sub="release → fully staged" />
+        <Stat label="Traffic yields" value={k.yields} sub={`right-hand lanes · ${k.deadlock_breaks} deadlocks broken`} />
       </Box>
       <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0,1fr))', gap: 2 }}>
         <Card title="Cumulative movements this shift">

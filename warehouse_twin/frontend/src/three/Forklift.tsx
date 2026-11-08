@@ -68,6 +68,7 @@ export function Forklift({ id }: { id: string }) {
   const role = useStore((s) => s.sim?.forklifts.find((f) => f.id === id)?.role ?? 'PUTAWAY');
   const load = useStore((s) => s.sim?.forklifts.find((f) => f.id === id)?.load ?? null);
   const state = useStore((s) => s.sim?.forklifts.find((f) => f.id === id)?.state ?? '');
+  const yieldTo = useStore((s) => s.sim?.forklifts.find((f) => f.id === id)?.yieldTo ?? null);
   const loadBundle = useStore((s) => (load ? s.bundleIndex[load] : undefined));
   const selected = useStore((s) => s.selection?.kind === 'forklift' && s.selection.id === id);
   const select = useStore((s) => s.select);
@@ -100,9 +101,9 @@ export function Forklift({ id }: { id: string }) {
       )}
       {labels && (
         <Html zIndexRange={[3, 0]} position={[0, 3.6, 0]} center style={{ pointerEvents: 'none' }}>
-          <div style={{ background: color, color: 'white', padding: '1px 6px', borderRadius: 4, fontSize: 12, fontWeight: 700,
+          <div style={{ background: yieldTo ? '#b45309' : color, color: 'white', padding: '1px 6px', borderRadius: 4, fontSize: 12, fontWeight: 700,
             fontFamily: 'Roboto, sans-serif', whiteSpace: 'nowrap', boxShadow: '0 1px 4px rgba(0,0,0,.5)', opacity: 0.95 }}>
-            {id}{state && state !== 'IDLE' ? ` · ${state.replace('_', ' ').toLowerCase()}` : ''}
+            {id}{yieldTo ? ` · yielding to ${yieldTo}` : state && state !== 'IDLE' ? ` · ${state.replace('_', ' ').toLowerCase()}` : ''}
           </div>
         </Html>
       )}

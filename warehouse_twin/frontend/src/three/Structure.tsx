@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import { Line } from '@react-three/drei';
 import type { Layout, Rect } from '../types';
@@ -200,6 +200,58 @@ function Markings({ layout, labels }: { layout: Layout; labels: boolean }) {
   );
 }
 
+/** Right-hand traffic: a chevron in each lane showing its direction of travel. */
+function LaneArrows({ layout }: { layout: Layout }) {
+  const ref = useRef<THREE.InstancedMesh>(null);
+  const arrows = useMemo(() => {
+    const skip = new Set(layout.nolane.map(([a, b]) => [a, b].sort().join('|')));
+    const out: { x: number; z: number; rot: number }[] = [];
+    for (const [a, b] of layout.graph.edges) {
+      if (skip.has([a, b].sort().join('|'))) continue;
+      const [ax, az] = layout.graph.nodes[a];
+      const [bx, bz] = layout.graph.nodes[b];
+      const len = Math.hypot(bx - ax, bz - az);
+      if (len < 5) continue;
+      const n = Math.max(1, Math.floor(len / 14));
+      for (const [sx, sz, ex, ez] of [[ax, az, bx, bz], [bx, bz, ax, az]]) {
+        const dx = (ex - sx) / len, dz = (ez - sz) / len;
+        const nx = -dz, nz = dx; // right-hand side of travel
+        for (let k = 0; k < n; k++) {
+          const u = (k + 0.5) / n;
+          out.push({ x: sx + (ex - sx) * u + nx * layout.laneOffset, z: sz + (ez - sz) * u + nz * layout.laneOffset,
+            rot: Math.atan2(-dz, dx) });
+        }
+      }
+    }
+    return out;
+  }, [layout]);
+  const geom = useMemo(() => {
+    const g = new THREE.BufferGeometry();
+    // flat chevron pointing along +x, lying on the floor
+    const v = [0.9, 0, 0, -0.6, 0, -0.55, -0.25, 0, 0, 0.9, 0, 0, -0.25, 0, 0, -0.6, 0, 0.55];
+    g.setAttribute('position', new THREE.Float32BufferAttribute(v, 3));
+    g.computeVertexNormals();
+    return g;
+  }, []);
+  useEffect(() => {
+    const m = ref.current;
+    if (!m) return;
+    const o = new THREE.Object3D();
+    arrows.forEach((a, i) => {
+      o.position.set(a.x, 0.03, a.z);
+      o.rotation.set(0, a.rot, 0);
+      o.updateMatrix();
+      m.setMatrixAt(i, o.matrix);
+    });
+    m.instanceMatrix.needsUpdate = true;
+  }, [arrows]);
+  return (
+    <instancedMesh ref={ref} args={[geom, undefined, arrows.length]}>
+      <meshBasicMaterial color="#f8fafc" transparent opacity={0.55} side={THREE.DoubleSide} depthWrite={false} />
+    </instancedMesh>
+  );
+}
+
 function Anchors({ layout }: { layout: Layout }) {
   return (
     <group>
@@ -235,6 +287,7 @@ export function Structure() {
       <Building roof={toggles.roof} />
       <Yard />
       <Markings layout={layout} labels={toggles.labels} />
+      {toggles.routes && <LaneArrows layout={layout} />}
       <Anchors layout={layout} />
     </group>
   );

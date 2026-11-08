@@ -23,9 +23,11 @@ BUNDLE_H = 0.5
 DUNNAGE = 0.08
 LEVEL_PITCH = BUNDLE_H + DUNNAGE
 STACK_PITCH = 7.0
-PRE_D = 4.5  # forklift centre -> stack centre when lined up in the aisle
+PRE_D = 3.1  # forklift centre -> stack centre when lined up (rear stays clear of the aisle lanes)
 APP_D = 2.0  # forklift centre -> stack centre when the load is over the stack
 TRUCK_BED = 1.35
+LANE_OFFSET = 1.6  # right-hand traffic: lane centre line offset from the aisle centre line
+LANE_OFFSET_FORKS_LEFT = 3.0  # sideways travel with forks towards the centre line: same occupied band
 
 # (row centre z, service aisle z)
 ROWS = [(-22.0, -15.0), (-8.0, -15.0), (8.0, 15.0), (22.0, 15.0)]
@@ -121,6 +123,7 @@ class Layout:
     anchors: list = field(default_factory=list)
     doors: list = field(default_factory=list)
     lanes: dict = field(default_factory=dict)  # staging lane id -> [stack ids]
+    nolane: set = field(default_factory=set)  # edges driven on the centre line (parking spurs)
 
     # ------------------------------------------------------------------ graph
     def node(self, x: float, z: float) -> str:
@@ -135,11 +138,18 @@ class Layout:
         self.adj[a][b] = d
         self.adj[b][a] = d
 
-    def chain(self, pts: list[tuple]) -> None:
+    def chain(self, pts: list[tuple], lane: bool = True) -> None:
         ids = [self.node(x, z) for x, z in pts]
         for a, b in zip(ids, ids[1:]):
             if a != b:
                 self.link(a, b)
+                if not lane:
+                    self.nolane.add(frozenset((a, b)))
+
+    def lane_offset(self, a: str, b: str, forks_left: bool = False) -> float:
+        if frozenset((a, b)) in self.nolane:
+            return 0.0
+        return LANE_OFFSET_FORKS_LEFT if forks_left else LANE_OFFSET
 
     def route(self, start: str, goal: str) -> list[str]:
         if start == goal:
@@ -194,6 +204,8 @@ class Layout:
                 "edges": sorted({tuple(sorted((a, b))) for a in self.adj for b in self.adj[a]}),
             },
             "lanes": self.lanes,
+            "laneOffset": LANE_OFFSET,
+            "nolane": sorted(sorted(e) for e in self.nolane),
         }
 
 
@@ -225,12 +237,12 @@ def build_layout() -> Layout:
     zone("WH01", "Z01", "Receiving (from production)", "RECEIVING", (-99, -26, -88, 25), "#f59e0b")
     zone("WH01", "Z02", "Storage Hall A", "STORAGE", (-82, -27, -12, -4), "#3b82f6")
     zone("WH01", "Z03", "Storage Hall B", "STORAGE", (-82, 4, -12, 27), "#6366f1")
-    zone("WH01", "Z05", "Putaway Fleet Parking", "PARKING", (-98, 25.5, -72, 29.5), "#22c55e")
+    zone("WH01", "Z05", "Putaway Fleet Parking", "PARKING", (-91.2, 25.6, -77.3, 29.7), "#22c55e")
     zone("WH02", "Z01", "Yard Storage A", "STORAGE", (10, -27, 81, -4), "#0ea5e9")
     zone("WH02", "Z02", "Yard Storage B", "STORAGE", (10, 4, 81, 27), "#14b8a6")
     zone("WH02", "Z03", "Dispatch Staging", "STAGING", (84, -27, 101, 27), "#a855f7")
     zone("WH02", "Z04", "Truck Loading & RFID Gate", "LOADING", (106, -40, 121, 12), "#ef4444")
-    zone("WH02", "Z05", "Picking Fleet Parking", "PARKING", (85, 27.5, 102, 33), "#3b82f6")
+    zone("WH02", "Z05", "Picking Fleet Parking", "PARKING", (86, 29.2, 99, 33.6), "#3b82f6")
 
     # --------------------------------------------------------------- storage
     bay_no = {"WH01": 0, "WH02": 0}
@@ -275,21 +287,23 @@ def build_layout() -> Layout:
         lay.chain([(x, az) for x in indoor_xs])
         lay.chain([(x, az) for x in yard_xs])
     lay.chain([(IN_W, 0.0), (IN_E, 0.0), (YD_W, 0.0), (YD_E, 0.0)])  # main aisle through the dock door
-    lay.chain([(IN_W, -15.0), (IN_W, 0.0), (IN_W, 15.0), (IN_W, 27.0)])
+    lay.chain([(IN_W, -15.0), (IN_W, 0.0), (IN_W, 15.0), (IN_W, 23.5)])
     lay.chain([(IN_E, -15.0), (IN_E, 0.0), (IN_E, 15.0)])
     lay.chain([(YD_W, -15.0), (YD_W, 0.0), (YD_W, 15.0)])
-    lay.chain([(YD_E, -15.0), (YD_E, 0.0), (YD_E, 15.0), (YD_E, 29.5)])
+    lay.chain([(YD_E, -15.0), (YD_E, 0.0), (YD_E, 15.0), (YD_E, 27.0)])
 
     # ---------------------------------------------------------------- parking
-    pin = lay.node(IN_W, 27.0)
-    for i, x in enumerate([-96.0, -92.0, -79.0, -75.0]):
-        fid = f"F-0{i + 1}"
-        lay.parking[fid] = {"id": f"P-{fid}", "x": x, "z": 27.5, "node": pin, "heading": 0.0 if x > IN_W else math.pi,
-                            "warehouse": "WH01"}
-    pyd = lay.node(YD_E, 29.5)
-    for i, x in enumerate([88.0, 92.0, 96.0, 100.0]):
-        fid = f"F-0{i + 5}"
-        lay.parking[fid] = {"id": f"P-{fid}", "x": x, "z": 30.5, "node": pyd, "heading": math.pi, "warehouse": "WH02"}
+    # Each forklift has its own bay off a parking spur, so reaching a bay never
+    # means driving through another parked forklift. Forklifts reverse in and
+    # park facing the spur.
+    def parking(fids, xs, lane_z, spot_z, junction_x, wh):
+        lay.chain(sorted([(x, lane_z) for x in xs] + [(junction_x, lane_z)]), lane=False)
+        for fid, x in zip(fids, xs):
+            lay.parking[fid] = {"id": f"P-{fid}", "x": x, "z": spot_z, "node": lay.node(x, lane_z),
+                                "heading": heading_of(0.0, -1.0), "warehouse": wh}
+
+    parking(["F-01", "F-02", "F-03", "F-04"], [-89.5, -84.0, -81.5, -79.0], 23.5, 28.2, IN_W, "WH01")
+    parking(["F-05", "F-06", "F-07", "F-08"], [88.0, 91.0, 94.0, 97.0], 27.0, 31.6, YD_E, "WH02")
 
     # ------------------------------------------------------- UWB anchors, doors
     for x in (-100, -66, -33, 0):
