@@ -14,6 +14,10 @@ Level 3  Real-time (+ IoT sensors)     $1,499/mo   live monitoring, anomalies, R
 Level 4  Enterprise (multi-site)       $2,999/mo   multi-site rollup, benchmarking
 ```
 
+> **Also in this repo:** [`warehouse_twin/`](warehouse_twin/README.md) is an interactive 3D warehouse
+> digital twin PoC for bundle tracking and truck dispatch assurance. It is self-contained, with its own backend,
+> frontend and Docker Compose stack.
+
 ---
 
 ## Quick start
